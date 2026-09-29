@@ -1,0 +1,16 @@
+spring:
+  profiles:
+    active: test
+  datasource:
+    url: jdbc:h2:mem:incident_analyst;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true

@@ -6,7 +6,7 @@
 - Agent 框架：LangChain4j
 - 实时推送：Spring `SseEmitter`
 - 数据存储：MySQL 5.6（Docker）
-- 数据访问：Spring Data JPA
+- 数据访问：MyBatis
 - 构建工具：Maven（后端）、Vite（前端）
 
 ### 选型理由与迁移成本
@@ -27,8 +27,8 @@ backend/src/main/java/com/lyl/incidentanalysthelper/
   service/        # 业务逻辑：Runbook、Agent 编排、报告生成
   tool/           # @Tool 注解的模拟数据读取方法
   model/          # 数据模型：Incident、Alert、Report 等
-  repository/     # JPA Repository + MockDataRepository
-  config/         # LangChain4j、SSE、PostgreSQL 配置
+  mapper/         # MyBatis Mapper + MockDataLoader（读 mock 文件）
+  config/         # LangChain4j、SSE、MySQL / MyBatis 配置
 backend/src/main/resources/mock-data/
   alerts.json
   metrics.json
@@ -98,8 +98,8 @@ SseEvent 是传输格式，不落库。后端推送时构造，前端接收后�
 2. **LangChain4j 工具调用**：用 `@Tool` 注解将模拟数据读取方法暴露给 LLM，Agent 按 Runbook 顺序调用。避免每个请求都创建新的 AiService 实例。
 3. **Runbook 驱动执行**：根据 alertName 匹配预定义步骤，每步调用工具并归一化为证据。
 4. **状态机与幂等**：`PENDING → RUNNING → COMPLETED/FAILED`，`POST /start` 仅允许 PENDING/FAILED。COMPLETED 直接返回已关联的报告，不重新执行 Agent。
-5. **MySQL 持久化与**：Alert、Incident、Report 分表存储，通过外键关联。证据链和推荐操作使用 String 存储。`docker-compose up -d` 启动本地数据库。
-6. **模拟数据加载**：启动时从 `mock-data/*.json` 读取，通过 `MockDataRepository` 统一访问，便于后续替换真实数据源。对接真实 Prometheus 时，在转换层将 `alertname` 映射为 `alertName`，时间戳转为 `yyyy-MM-dd HH:mm:ss` 格式。
+5. **MySQL 持久化**：Alert、Incident、Report 分表存储，通过外键关联。证据链和推荐操作使用 String 存储。本地开发复用本机已有 MySQL（Docker 默认开启，端口 3306），应用连 `localhost:3306`；不在仓库内维护 `docker-compose.yml`。表结构用 `schema.sql` 初始化（MyBatis 不自动建表）。
+6. **模拟数据加载**：启动时从 `mock-data/*.json` 读取，通过 `MockDataLoader` 统一访问，便于后续替换真实数据源。对接真实 Prometheus 时，在转换层将 `alertname` 映射为 `alertName`，时间戳转为 `yyyy-MM-dd HH:mm:ss` 格式。
 
 
 ##  API 契约

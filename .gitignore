@@ -43,6 +43,10 @@ build/
 !**/src/test/**/target/
 backend/src/main/resources/application-local.yml
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # Logs
 *.log
 
