@@ -1,11 +1,13 @@
 CREATE TABLE IF NOT EXISTS alert (
     id BIGINT NOT NULL AUTO_INCREMENT,
-    alert_name VARCHAR(255) NOT NULL,
+    alert_name VARCHAR(191) NOT NULL,
     severity VARCHAR(64) NOT NULL,
-    service VARCHAR(255) NOT NULL,
+    service VARCHAR(191) NOT NULL,
     starts_at VARCHAR(19) NOT NULL,
     labels TEXT,
-    PRIMARY KEY (id)
+    incident_id BIGINT DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_alert_key (service, alert_name, starts_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS analysis_report (
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS incident (
     report_id BIGINT DEFAULT NULL,
     created_at VARCHAR(19) NOT NULL,
     completed_at VARCHAR(19) DEFAULT NULL,
+    error_message VARCHAR(1024) DEFAULT NULL,
     PRIMARY KEY (id),
     CONSTRAINT fk_incident_alert FOREIGN KEY (alert_id) REFERENCES alert (id),
     CONSTRAINT fk_incident_report FOREIGN KEY (report_id) REFERENCES analysis_report (id)

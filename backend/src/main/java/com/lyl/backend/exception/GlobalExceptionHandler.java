@@ -1,5 +1,6 @@
 package com.lyl.backend.exception;
 
+import com.lyl.backend.exception.ResourceNotFoundException;
 import com.lyl.backend.model.ApiResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +16,21 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException ex) {
         return ResponseEntity.status(400).body(ApiResponse.error(400, ex.getMessage()));
+    }
+
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleValidationException(ValidationException ex) {
+        return ResponseEntity.status(400).body(ApiResponse.error(400, ex.getMessage()));
+    }
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleResourceNotFound(ResourceNotFoundException ex) {
+        return ResponseEntity.status(404).body(ApiResponse.error(404, ex.getMessage()));
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConflict(ConflictException ex) {
+        return ResponseEntity.status(409).body(ApiResponse.error(409, ex.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

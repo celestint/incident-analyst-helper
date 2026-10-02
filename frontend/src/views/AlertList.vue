@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useIncident } from '@/composables/useIncident'
 import { ElMessage } from 'element-plus'
 
+const router = useRouter()
 const { alerts, loadAlerts, isAnalyzing, startAnalysis, analyzeError } = useIncident()
 
 onMounted(() => {
@@ -14,10 +16,15 @@ const handleAnalyze = (alertId: number) => {
   startAnalysis(alertId).then(result => {
     if (result) {
       ElMessage.success('分析已启动')
+      router.push(`/incidents/${result.incidentId}`)
     } else if (analyzeError.value) {
       ElMessage.error(analyzeError.value)
     }
   })
+}
+
+const handleViewDetail = (incidentId: number) => {
+  router.push(`/incidents/${incidentId}`)
 }
 
 const getSeverityColor = (severity: string) => {
@@ -29,9 +36,19 @@ const getSeverityColor = (severity: string) => {
   return colorMap[severity] || '#909399'
 }
 
-const getStatusText = (incidentId: number | null) => {
+const getStatusText = (incidentId: number | null, status: string) => {
   if (incidentId === null) return '待分析'
-  return '已完成'
+  if (status === 'FAILED') return '失败'
+  if (status === 'COMPLETED') return '已完成'
+  return status
+}
+
+const getStatusTagType = (incidentId: number | null, status: string) => {
+  if (incidentId === null) return 'warning'
+  if (status === 'FAILED') return 'danger'
+  if (status === 'COMPLETED') return 'success'
+  if (status === 'RUNNING') return 'primary'
+  return 'info'
 }
 </script>
 
@@ -56,12 +73,12 @@ const getStatusText = (incidentId: number | null) => {
       <el-table-column prop="startsAt" label="开始时间" width="180" />
       <el-table-column prop="status" label="状态" width="120">
         <template #default="{ row }">
-          <el-tag :type="row.incidentId ? 'success' : 'warning'">
-            {{ getStatusText(row.incidentId) }}
+          <el-tag :type="getStatusTagType(row.incidentId, row.status)">
+            {{ getStatusText(row.incidentId, row.status) }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120">
+      <el-table-column label="操作" width="280">
         <template #default="{ row }">
           <el-button
             type="primary"
@@ -70,6 +87,14 @@ const getStatusText = (incidentId: number | null) => {
             @click="handleAnalyze(row.id)"
           >
             分析
+          </el-button>
+          <el-button
+            type="info"
+            size="small"
+            :disabled="row.incidentId === null || isAnalyzing"
+            @click="handleViewDetail(row.incidentId!)"
+          >
+            {{ row.status === 'FAILED' ? '查看失败原因' : '查看报告' }}
           </el-button>
         </template>
       </el-table-column>

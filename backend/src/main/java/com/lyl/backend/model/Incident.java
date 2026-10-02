@@ -10,4 +10,5 @@ public class Incident {
     private Long reportId;
     private String createdAt;
     private String completedAt;
+    private String errorMessage;
 }

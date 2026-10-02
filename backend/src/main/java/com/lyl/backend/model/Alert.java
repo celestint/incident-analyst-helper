@@ -10,4 +10,5 @@ public class Alert {
     private String service;
     private String startsAt;
     private String labels;
+    private Long incidentId;
 }
