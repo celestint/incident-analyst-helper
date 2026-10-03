@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import type { Alert } from '@/types'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -8,10 +7,9 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/AlertList.vue'),
   },
   {
+    // 旧详情链接兼容：重定向到工作台并选中对应告警
     path: '/incidents/:id',
-    name: 'IncidentDetail',
-    component: () => import('@/views/IncidentDetail.vue'),
-    props: true,
+    redirect: to => ({ path: '/', query: { incidentId: to.params.id } }),
   },
 ]
 

@@ -8,3 +8,9 @@ mybatis:
   mapper-locations: classpath:mapper/*.xml
   configuration:
     map-underscore-to-camel-case: true
+
+app:
+  analysis:
+    executor: mock   # mock | llm
+    max-iterations: 12
+    stale-minutes: 10

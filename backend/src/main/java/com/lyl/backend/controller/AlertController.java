@@ -7,12 +7,8 @@ import com.lyl.backend.mapper.IncidentMapper;
 import com.lyl.backend.model.Alert;
 import com.lyl.backend.model.ApiResponse;
 import com.lyl.backend.model.Incident;
-import com.lyl.backend.tool.MockDataLoader;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,12 +17,10 @@ import java.util.Map;
 @RequestMapping("/api/alerts")
 public class AlertController {
 
-    private final MockDataLoader mockDataLoader;
     private final AlertMapper alertMapper;
     private final IncidentMapper incidentMapper;
 
-    public AlertController(MockDataLoader mockDataLoader, AlertMapper alertMapper, IncidentMapper incidentMapper) {
-        this.mockDataLoader = mockDataLoader;
+    public AlertController(AlertMapper alertMapper, IncidentMapper incidentMapper) {
         this.alertMapper = alertMapper;
         this.incidentMapper = incidentMapper;
     }

@@ -31,10 +31,10 @@ export function useIncident() {
       const incidentId = res.data.incidentId
       currentAlert.value = alerts.value.find(a => a.id === alertId) || null
 
-      // 获取分析详情
+      // 获取分析详情（后端返回扁平结构）
       const detailRes = await incidentApi.getIncident(incidentId)
-      currentIncident.value = detailRes.data.incident
-      currentReport.value = detailRes.data.report
+      currentIncident.value = detailRes.data
+      currentReport.value = detailRes.data.report ?? null
 
       return { incidentId, status: res.data.status }
     } catch (err: any) {

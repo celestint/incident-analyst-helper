@@ -1,4 +1,3 @@
-import type { Ref } from 'vue'
 import type { SseEvent } from '@/types'
 
 export function useSse(

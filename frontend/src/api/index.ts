@@ -16,7 +16,7 @@ request.interceptors.request.use(
   }
 )
 
-// 响应拦截器
+// 响应拦截器：统一解开 { code, message, data } 包装，code !== 200 转为异常
 request.interceptors.response.use(
   response => {
     const res = response.data as ApiResponse
@@ -24,7 +24,8 @@ request.interceptors.response.use(
       console.error('API Error:', res.message)
       return Promise.reject(new Error(res.message || 'Error'))
     }
-    return res
+    // 拦截器把 AxiosResponse 换成 ApiResponse，调用方以 res.data 取业务数据
+    return res as unknown as typeof response
   },
   error => {
     console.error('Request Error:', error.message)
@@ -33,3 +34,7 @@ request.interceptors.response.use(
 )
 
 export default request
+
+// 统一出口：页面从 '@/api' 导入各业务 API
+export { alertApi } from './alert'
+export { incidentApi } from './incident'

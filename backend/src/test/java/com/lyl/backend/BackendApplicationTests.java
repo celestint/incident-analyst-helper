@@ -248,6 +248,29 @@ class BackendApplicationTests {
                 .andExpect(jsonPath("$.data.reportId").exists());
     }
 
+    /** 测试历史事件端点：完成后返回全部落库事件，首条 incident_received、末条 report_finalized */
+    @Test
+    void testGetIncidentEvents() throws Exception {
+        int incidentId = startIncidentAndGetId();
+        waitForCompletion(incidentId);
+
+        mockMvc.perform(get("/api/incidents/" + incidentId + "/events"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").isArray())
+                .andExpect(jsonPath("$.data[0].type").value("incident_received"))
+                .andExpect(jsonPath("$.data[0].sequence").value(1))
+                .andExpect(jsonPath("$.data[?(@.type=='report_finalized')]").isNotEmpty());
+    }
+
+    /** 测试历史事件端点对不存在的 incident 返回 404 */
+    @Test
+    void testGetIncidentEventsNotFound() throws Exception {
+        mockMvc.perform(get("/api/incidents/999999/events"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(404));
+    }
+
     // ========== SSE 测试 ==========
 
     /** 测试 SSE 流接口可建立连接，返回 text/event-stream */

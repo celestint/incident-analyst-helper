@@ -7,6 +7,11 @@ export const alertApi = {
     return request.get('/alerts')
   },
 
+  // 获取告警详情
+  getAlert(id: number): Promise<ApiResponse<AlertDetail>> {
+    return request.get(`/alerts/${id}`)
+  },
+
   // 创建告警（外部系统调用，前端不直接用）
   createAlert(data: Omit<Alert, 'id' | 'incidentId' | 'status'>): Promise<ApiResponse<Alert>> {
     return request.post('/alerts', data)

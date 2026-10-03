@@ -18,7 +18,10 @@ public interface AlertMapper {
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(Alert alert);
 
-    @Select("SELECT id, alert_name, severity, service, starts_at, labels, incident_id FROM alert WHERE id = #{id}")
+    /**
+     * 按主键查询告警并加行锁（FOR UPDATE），须在事务内调用，用于 start 接口防并发重复触发
+     */
+    @Select("SELECT id, alert_name, severity, service, starts_at, labels, incident_id FROM alert WHERE id = #{id} FOR UPDATE")
     Alert selectByIdForUpdate(Long id);
 
     @Select("SELECT id, alert_name, severity, service, starts_at, labels, incident_id FROM alert ORDER BY id")

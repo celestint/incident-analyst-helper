@@ -5,3 +5,26 @@ spring:
     username: ***
     password: ***
     driver-class-name: com.mysql.cj.jdbc.Driver
+
+# OpenAI 兼容接口配置（智谱 GLM / DeepSeek / 百炼兼容模式等）
+# 多模型故障转移：按 models 顺序调用，某模型限流/异常自动切下一个；
+# 条目内省略的 base-url/api-key/timeout-seconds 继承顶层缺省值。
+ai:
+  base-url: https://open.bigmodel.cn/api/paas/v4   # 顶层缺省，按实际服务商修改
+  api-key: ${AI_API_KEY:}                          # 建议用环境变量注入，不要写死
+  timeout-seconds: 120
+  models:
+    - name: glm-4.7-flash
+      model: GLM-4.7-Flash
+    # - name: glm-4-flash
+    #   model: glm-4-flash
+    # - name: deepseek                              # 不同服务商：单独覆盖 base-url/api-key
+    #   base-url: https://api.deepseek.com
+    #   api-key: ${DEEPSEEK_API_KEY:}
+    #   model: deepseek-chat
+
+app:
+  analysis:
+    executor: llm    # mock | llm
+    max-iterations: 12
+    stale-minutes: 10
