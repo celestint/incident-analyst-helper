@@ -4,14 +4,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { alertApi, incidentApi } from '@/api'
 import AnalysisPane from '@/components/AnalysisPane.vue'
 import { ElMessage } from 'element-plus'
+import { useScrollFlash } from '@/composables/useScrollFlash'
+import { severityLabel, severityTagType, statusLabel } from '@/utils/labels'
 import type { Alert } from '@/types'
 
 /**
  * 告警分析工作台：左栏告警总览（卡片列表），右栏分析面板。
  * 选中态存 route query（?incidentId=），刷新后恢复。
+ * 卡片首行：级别 + 服务 + 告警名（单行省略，悬浮显示全名）。
  */
 const route = useRoute()
 const router = useRouter()
+
+// 仅滚动时显示滚动条
+const { scrolling: listScrolling, onScroll: onListScroll } = useScrollFlash()
 
 const alerts = ref<Alert[]>([])
 const loading = ref(false)
@@ -22,6 +28,12 @@ const selectedIncidentId = computed<number | null>(() => {
   const raw = route.query.incidentId
   const n = Number(Array.isArray(raw) ? raw[0] : raw)
   return Number.isFinite(n) && n > 0 ? n : null
+})
+
+/** 选中的告警（含服务/级别/告警名，供右栏状态栏展示） */
+const selectedAlert = computed<Alert | null>(() => {
+  if (selectedIncidentId.value == null) return null
+  return alerts.value.find(a => a.incidentId === selectedIncidentId.value) ?? null
 })
 
 onMounted(() => {
@@ -35,11 +47,15 @@ onUnmounted(() => {
 })
 
 const loadAlerts = async () => {
+  loading.value = true
   try {
     const res = await alertApi.getAlerts()
     alerts.value = res.data
   } catch (err: any) {
     console.error('Failed to load alerts:', err)
+    ElMessage.error(err.message || '告警列表加载失败')
+  } finally {
+    loading.value = false
   }
 }
 
@@ -66,20 +82,6 @@ const handleAnalyze = async (alert: Alert) => {
 const onFinished = () => {
   loadAlerts()
 }
-
-// ===== 展示映射 =====
-const severityLabel = (severity: string) => {
-  const map: Record<string, string> = { critical: '严重', warning: '警告', info: '信息' }
-  return map[severity] ?? severity
-}
-
-const severityTagType = (severity: string) => {
-  const map: Record<string, string> = { critical: 'danger', warning: 'warning', info: 'info' }
-  return map[severity] || 'info'
-}
-
-/** 状态圆圈：分析完成视为结束（灰圈），其余视为持续（红圈） */
-const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
 </script>
 
 <template>
@@ -89,27 +91,41 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
       <div class="pane-header">
         <h2>告警总览</h2>
       </div>
-      <div class="alert-list" v-loading="loading">
+      <div
+        class="alert-list"
+        :class="{ 'is-scrolling': listScrolling }"
+        @scroll="onListScroll"
+        v-loading="loading"
+      >
         <div
           v-for="alert in alerts"
           :key="alert.id"
           class="alert-card"
           :class="{ active: alert.incidentId != null && alert.incidentId === selectedIncidentId }"
+          role="button"
+          tabindex="0"
+          :aria-label="`选择告警 ${alert.alertName}`"
           @click="select(alert)"
+          @keydown.enter.prevent="select(alert)"
+          @keydown.space.prevent="select(alert)"
         >
           <div class="card-row">
             <span
               class="status-dot"
-              :class="isResolved(alert) ? 'resolved' : 'ongoing'"
-              :title="isResolved(alert) ? '告警已结束' : '告警持续中'"
+              :class="alert.status === 'COMPLETED' ? 'resolved' : 'ongoing'"
+              :title="alert.status === 'COMPLETED' ? '告警已结束' : '告警持续中'"
             />
-            <el-tag type="info" effect="plain" size="small">{{ alert.service }}</el-tag>
-            <strong class="alert-name">{{ alert.alertName }}</strong>
-            <el-tag :type="severityTagType(alert.severity)" size="small">
+            <el-tag :type="severityTagType(alert.severity)" size="small" class="severity-tag">
               {{ severityLabel(alert.severity) }}
             </el-tag>
+            <el-tag type="info" effect="plain" size="small" class="service-tag">{{ alert.service }}</el-tag>
+            <el-tooltip :content="alert.alertName" placement="top" :show-after="300">
+              <strong class="alert-name">{{ alert.alertName }}</strong>
+            </el-tooltip>
           </div>
+          <!-- 第二行：左时间（与首行级别 tag 左对齐）+ 右操作 -->
           <div class="card-row action-row">
+            <span class="alert-time">{{ alert.startsAt }}</span>
             <el-button
               v-if="alert.status === 'PENDING'"
               type="primary"
@@ -126,7 +142,7 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
               class="clickable-tag"
               @click.stop="select(alert)"
             >
-              分析中
+              {{ statusLabel(alert.status) }}
             </el-tag>
             <el-button
               v-else-if="alert.status === 'COMPLETED'"
@@ -142,7 +158,7 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
               class="clickable-tag"
               @click.stop="select(alert)"
             >
-              失败
+              {{ statusLabel(alert.status) }}
             </el-tag>
           </div>
         </div>
@@ -152,7 +168,11 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
 
     <!-- 右栏：分析 -->
     <main class="right-pane">
-      <AnalysisPane :incident-id="selectedIncidentId" @finished="onFinished" />
+      <AnalysisPane
+        :incident-id="selectedIncidentId"
+        :alert="selectedAlert"
+        @finished="onFinished"
+      />
     </main>
   </div>
 </template>
@@ -172,15 +192,15 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 6px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--color-border-light);
   overflow: hidden;
 }
 
 .pane-header {
   padding: 14px 16px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--color-border-light);
 }
 
 .pane-header h2 {
@@ -193,10 +213,34 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
   overflow-y: auto;
   padding: 12px;
   box-sizing: border-box;
+  /* 滚动条默认隐藏，仅滚动时显示 */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.alert-list.is-scrolling {
+  scrollbar-color: var(--color-border) transparent;
+}
+
+.alert-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.alert-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.alert-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.alert-list.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--color-border);
 }
 
 .alert-card {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--color-border-light);
   border-radius: 6px;
   padding: 12px;
   margin-bottom: 12px;
@@ -205,35 +249,28 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
 }
 
 .alert-card:hover {
-  border-color: #409eff;
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.15);
+  border-color: var(--color-primary-light-3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .alert-card.active {
-  border-color: #409eff;
-  background: #ecf5ff;
+  border-color: var(--color-primary);
+  background: var(--color-primary-light-9);
+}
+
+.alert-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .card-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
-.card-row + .card-row {
-  margin-top: 8px;
-}
-
-.alert-name {
-  font-size: 14px;
-  text-align: left;
-}
-
-.card-row .el-tag {
-  flex-shrink: 0;
-}
-
-/* 状态圆圈：结束=灰，持续=红 */
+/* 状态圆点：结束=灰，持续=红（脉冲） */
 .status-dot {
   width: 10px;
   height: 10px;
@@ -242,11 +279,11 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
 }
 
 .status-dot.resolved {
-  background: #c0c4cc;
+  background: var(--el-text-color-placeholder);
 }
 
 .status-dot.ongoing {
-  background: #f56c6c;
+  background: var(--color-danger);
   animation: pulse 2s infinite;
 }
 
@@ -260,9 +297,36 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
   }
 }
 
+.card-row + .card-row {
+  margin-top: 8px;
+}
+
+.severity-tag,
+.service-tag {
+  flex-shrink: 0;
+}
+
+/* 告警名单行省略，悬浮经 tooltip 显示全名 */
+.alert-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .action-row {
-  justify-content: flex-end;
+  /* 18px = 状态圆点 10px + 间距 8px，使时间左缘与首行级别 tag 左缘对齐 */
+  padding-left: 18px;
+  justify-content: space-between;
   min-height: 24px;
+}
+
+.alert-time {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .clickable-tag {
@@ -273,9 +337,9 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
 .right-pane {
   flex: 1;
   min-width: 0;
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 6px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--color-border-light);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -283,7 +347,27 @@ const isResolved = (alert: Alert) => alert.status === 'COMPLETED'
 
 .right-pane > :deep(.analysis-pane) {
   flex: 1;
-  padding: 16px;
-  box-sizing: border-box;
+}
+
+/* 窄屏单列：左栏不再定宽，上下堆叠 */
+@media (max-width: 768px) {
+  .workbench {
+    flex-direction: column;
+    height: auto;
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .left-pane {
+    width: 100%;
+  }
+
+  .alert-list {
+    max-height: 40vh;
+  }
+
+  .right-pane {
+    min-height: 50vh;
+  }
 }
 </style>

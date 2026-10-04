@@ -16,10 +16,14 @@ CREATE TABLE IF NOT EXISTS analysis_report (
     needs_handling TINYINT(1) NOT NULL DEFAULT 0 COMMENT '事件摘要：是否需要处理',
     root_cause_hypothesis TEXT COMMENT '当前报警产生原因',
     confidence DOUBLE COMMENT '结论置信度 0~1',
-    recommended_actions TEXT COMMENT '推荐SOP，JSON数组字符串 [{"priority":1,"action":"...","risk":"LOW|MEDIUM|HIGH"}]',
-    judgment_logic TEXT COMMENT '判断逻辑：证据融入推理链的叙述文本',
+    confidence_reason TEXT COMMENT '置信度理由：LLM 按评分锚点给出的依据说明',
+    recommended_actions TEXT COMMENT '推荐SOP，JSON数组字符串 [{"priority":1,"action":"..."}]',
+    judgment_logic TEXT COMMENT '判断逻辑：证据融入推理链的叙述文本，1. xxx 分行格式',
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 既有库升级（MySQL 不支持 ADD COLUMN IF NOT EXISTS，已建过 analysis_report 表时手动执行一次）：
+-- ALTER TABLE analysis_report ADD COLUMN confidence_reason TEXT COMMENT '置信度理由：LLM 按评分锚点给出的依据说明' AFTER confidence;
 
 CREATE TABLE IF NOT EXISTS incident (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

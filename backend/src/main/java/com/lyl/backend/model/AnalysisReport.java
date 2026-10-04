@@ -17,7 +17,9 @@ public class AnalysisReport {
     private String rootCauseHypothesis;
     /** 结论置信度，0~1 */
     private Double confidence;
-    /** 推荐SOP，JSON 数组字符串：[{"priority":1,"action":"...","risk":"LOW|MEDIUM|HIGH"}]，risk 标注该动作自身的执行风险 */
+    /** 置信度理由：LLM 按评分锚点给出的依据说明（低置信度时前端悬浮展示） */
+    private String confidenceReason;
+    /** 推荐SOP，JSON 数组字符串：[{"priority":1,"action":"..."}] */
     private String recommendedActions;
     /** 判断逻辑：证据融入推理链的叙述文本（证据注明来源/数值/时间点，不单列证据表） */
     private String judgmentLogic;

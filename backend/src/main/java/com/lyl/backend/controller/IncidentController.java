@@ -12,6 +12,7 @@ import com.lyl.backend.model.IncidentEvent;
 import com.lyl.backend.service.AnalysisDispatcher;
 import com.lyl.backend.service.IncidentEventService;
 import com.lyl.backend.service.IncidentService;
+import com.lyl.backend.service.RecommendedActionsNormalizer;
 import com.lyl.backend.service.SsePushService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -164,7 +165,9 @@ public class IncidentController {
     }
 
     /**
-     * 报告实体 → 前端响应结构（四段格式 + confidence）
+     * 报告实体 → 前端响应结构（四段格式 + confidence/confidenceReason）。
+     * recommendedActions 读取侧归一：历史报告可能存的是字符串数组（写入侧归一上线前），
+     * 统一转成 [{priority, action}]，保证接口永远输出结构正确且非空的 SOP 列表
      */
     private Map<String, Object> convertReportToResponse(AnalysisReport report) {
         Map<String, Object> data = new HashMap<>();
@@ -173,7 +176,10 @@ public class IncidentController {
         data.put("needsHandling", report.getNeedsHandling());
         data.put("rootCauseHypothesis", report.getRootCauseHypothesis());
         data.put("confidence", report.getConfidence());
-        data.put("recommendedActions", parseJsonArray(report.getRecommendedActions()));
+        data.put("confidenceReason", report.getConfidenceReason());
+        Object parsedActions = parseJsonArray(report.getRecommendedActions());
+        data.put("recommendedActions", RecommendedActionsNormalizer.normalize(
+                parsedActions instanceof List<?> list ? list : List.of()));
         data.put("judgmentLogic", report.getJudgmentLogic());
         return data;
     }

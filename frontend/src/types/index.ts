@@ -35,10 +35,12 @@ export interface AnalysisReport {
   needsHandling: boolean
   /** 当前报警产生原因 */
   rootCauseHypothesis: string
-  /** 结论置信度 0~1 */
+  /** 结论置信度 0~1；< 0.6 时前端显示"当前置信度较低"提示 */
   confidence: number
-  /** 推荐SOP，risk 标注该动作自身的执行风险 */
-  recommendedActions: Array<{ priority: number; action: string; risk: string }>
+  /** 置信度理由：LLM 按评分锚点给出的依据说明（低置信度提示悬浮展示） */
+  confidenceReason?: string
+  /** 推荐SOP，前端渲染为"1. 动作"编号列表 */
+  recommendedActions: Array<{ priority: number; action: string }>
   /** 判断逻辑：证据融入推理链的叙述文本 */
   judgmentLogic: string
 }

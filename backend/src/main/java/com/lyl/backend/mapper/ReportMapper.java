@@ -13,8 +13,8 @@ public interface ReportMapper {
      * 新增报告，回填自增主键
      */
     @Insert("INSERT INTO analysis_report(is_noise, needs_handling, root_cause_hypothesis, confidence, " +
-            "recommended_actions, judgment_logic) VALUES(#{isNoise}, #{needsHandling}, #{rootCauseHypothesis}, " +
-            "#{confidence}, #{recommendedActions}, #{judgmentLogic})")
+            "confidence_reason, recommended_actions, judgment_logic) VALUES(#{isNoise}, #{needsHandling}, " +
+            "#{rootCauseHypothesis}, #{confidence}, #{confidenceReason}, #{recommendedActions}, #{judgmentLogic})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(AnalysisReport report);
 
@@ -23,7 +23,7 @@ public interface ReportMapper {
      */
     @Select("""
             SELECT id, is_noise, needs_handling, root_cause_hypothesis, confidence,
-                   recommended_actions, judgment_logic
+                   confidence_reason, recommended_actions, judgment_logic
             FROM analysis_report
             WHERE id = #{id}
             """)

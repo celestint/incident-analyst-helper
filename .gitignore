@@ -2,6 +2,11 @@
 CLAUDE.md
 .cursor
 docs/AGENTS.md
+AGENTS.md
+
+# Local runtime data
+backend/data/
+theme-preview.html
 
 # Maven
 target/
