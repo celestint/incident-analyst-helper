@@ -178,9 +178,10 @@ const onFinished = () => {
 </template>
 
 <style scoped>
+/* 高度只减 52px 顶部导航：border-box 已含上下 20px 页边距（此前多减 40px 导致底部空白） */
 .workbench {
   display: flex;
-  height: calc(100vh - 40px);
+  height: calc(100vh - 52px);
   gap: 16px;
   padding: 20px;
   box-sizing: border-box;
@@ -193,7 +194,7 @@ const onFinished = () => {
   display: flex;
   flex-direction: column;
   background: var(--el-bg-color);
-  border-radius: 6px;
+  border-radius: 12px;
   border: 1px solid var(--color-border-light);
   overflow: hidden;
 }
@@ -241,7 +242,7 @@ const onFinished = () => {
 
 .alert-card {
   border: 1px solid var(--color-border-light);
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
   cursor: pointer;
@@ -338,7 +339,7 @@ const onFinished = () => {
   flex: 1;
   min-width: 0;
   background: var(--el-bg-color);
-  border-radius: 6px;
+  border-radius: 12px;
   border: 1px solid var(--color-border-light);
   overflow: hidden;
   display: flex;

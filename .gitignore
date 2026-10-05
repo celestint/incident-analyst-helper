@@ -53,6 +53,14 @@ build/
 !**/src/test/**/target/
 backend/src/main/resources/application-local.yml
 
+# Mock data large CSVs (AIOps dataset, kept locally only; directories preserved via .gitkeep)
+backend/src/main/resources/mock-data/logs/*
+backend/src/main/resources/mock-data/metrics/*
+backend/src/main/resources/mock-data/traces/*
+!backend/src/main/resources/mock-data/logs/.gitkeep
+!backend/src/main/resources/mock-data/metrics/.gitkeep
+!backend/src/main/resources/mock-data/traces/.gitkeep
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

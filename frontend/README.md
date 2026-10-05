@@ -27,10 +27,12 @@ frontend/
     ├── api/                        axios 封装与后端接口（统一解 { code, message, data } 包装）
     ├── types/index.ts              与后端契约的类型定义（Alert/Incident/SseEvent 等，改接口先看这里）
     ├── utils/labels.ts             级别/状态 → 文案与 tag 类型的统一映射（AlertList 与 AnalysisPane 共用）
+    ├── utils/format.ts             报告文本格式化（判断逻辑编号归一/全角转半角，AnalysisPane 共用）
     ├── composables/                组合式函数（useSse/useIncident/useScrollFlash 等）
     ├── views/AlertList.vue         首页左栏：告警总览（卡片列表）
     └── components/
         ├── AnalysisPane.vue        右栏分析面板：吸顶状态栏 + 分析过程 + 分析报告
+        ├── AppNavBar.vue           顶部导航：品牌名 + 视角切换器（未来多页入口，占位项带「规划中」角标）
         └── ProcessTimeline.vue     分析过程时间线（SSE 事件流聚合为步骤，图标化渲染）
 ```
 
@@ -38,11 +40,13 @@ frontend/
 
 | 要改什么 | 文件 |
 | --- | --- |
+| 顶部导航、品牌名、视角切换占位 | `src/components/AppNavBar.vue`（新页面就绪后在 tabs 数组补 `to` 路由） |
 | 告警卡片/列表布局、筛选、轮询 | `src/views/AlertList.vue` |
 | 右栏顶部状态栏、分析报告排版 | `src/components/AnalysisPane.vue` |
 | 分析过程时间线（步骤图标/折叠/聚合规则） | `src/components/ProcessTimeline.vue` |
 | 主题色/灰阶/全局 token | `src/style.css`（`:root` 块 + `--el-color-*` 接管） |
 | 级别/状态文案（如"已分析""严重"） | `src/utils/labels.ts` |
+| 报告区 SOP/判断逻辑的编号格式与文本归一 | `src/utils/format.ts`（模板在 `AnalysisPane.vue`） |
 | 后端接口调用、响应包装 | `src/api/` |
 | 类型契约（新字段/新事件类型） | `src/types/index.ts` |
 | 滚动条"仅滚动时显示"等通用行为 | `src/composables/` |
@@ -51,6 +55,7 @@ frontend/
 
 - **颜色必须走 token**：`style.css` 的 `:root` 块是全站颜色唯一定义处（`--color-*` 语义 token + `--el-color-primary` 系列接管 Element Plus 主题）。组件内禁止裸 hex/rgb，需要新颜色先加 token 再引用
 - **状态/级别文案统一走 `utils/labels.ts`**：不要在组件里再写文案 map（当前映射：PENDING=待分析、RUNNING=分析中、COMPLETED=已分析、FAILED=分析失败）
+- **报告区文案格式统一"N. 内容"编号**（半角点 + 单个空格）：推荐SOP 前缀由模板拼、判断逻辑经 `utils/format.ts` 归一（含全角"１．"转半角、"第X步"转"N."、缺失换行智能补齐）；无 risk 标签；置信度不显示百分比，仅 `confidence < 0.6` 时显示"当前置信度较低"提示（悬浮展示后端 `confidenceReason`）
 - **SSE 事件契约**：`text_delta` 不落库无 sequence；落库事件按 sequence 去重；事件类型见 `types/index.ts`
 - **时间格式**：`yyyy-MM-dd HH:mm:ss`，不考虑时区
 - **长文本单行省略**：列表/折叠头一律 `nowrap + ellipsis`，全名用 `el-tooltip` 悬浮展示，禁止多行换行撑爆固定行高

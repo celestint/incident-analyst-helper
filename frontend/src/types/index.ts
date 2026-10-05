@@ -5,6 +5,8 @@ export interface Alert {
   severity: 'critical' | 'warning' | 'info'
   service: string
   startsAt: string
+  /** 告警结束时间，为空（undefined/null/空串）表示未结束，前端显示"至今" */
+  endsAt?: string
   incidentId: number | null
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
 }
@@ -29,7 +31,7 @@ export interface Incident {
 // 分析报告（四段格式：事件摘要 / 根因 / 推荐SOP / 判断逻辑）
 export interface AnalysisReport {
   id: number
-  /** 事件摘要：是否噪音报警 */
+  /** 事件摘要：是否噪音 */
   isNoise: boolean
   /** 事件摘要：是否需要处理 */
   needsHandling: boolean

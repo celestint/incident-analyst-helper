@@ -91,7 +91,8 @@ public class LlmChatClient {
                 log.warn("LLM model {} failed, trying next: {}", name, message);
             }
         }
-        throw new IllegalStateException("全部模型调用失败: " + String.join(" | ", errors));
+        log.error("全部模型调用失败, 各模型错误: {}", String.join(" | ", errors));
+        throw new IllegalStateException("全部模型调用失败，请重试");
     }
 
     /**

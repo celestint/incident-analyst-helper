@@ -15,7 +15,9 @@ import java.util.Map;
 /**
  * Runbook 关键词匹配服务。
  * 读取 mock-data/runbook-keywords.json（文件名 -> 关键词列表），
- * 按告警名（忽略大小写）匹配 runbooks/ 下的手册文件，返回手册全文。
+ * 按告警名（忽略大小写）匹配 runbooks/ 下的手册文件，返回手册全文；
+ * 关键词未命中（或命中手册文件读取失败）时回退返回通用兜底手册 Fallback.md，
+ * 让"未命中手册"从自由规划变成按兜底手册执行。
  */
 @Slf4j
 @Service
@@ -23,6 +25,7 @@ public class RunbookService {
 
     private static final String KEYWORDS_FILE = "mock-data/runbook-keywords.json";
     private static final String RUNBOOK_DIR = "mock-data/runbooks/";
+    private static final String FALLBACK_RUNBOOK = "Fallback.md";
 
     private final ObjectMapper objectMapper;
     /** 文件名 -> 关键词列表 */
@@ -53,22 +56,25 @@ public class RunbookService {
     }
 
     /**
-     * 按告警名匹配手册。命中返回文件名与手册全文；未命中返回 null。
+     * 按告警名匹配手册。命中返回文件名与手册全文；未命中回退兜底手册；兜底手册也读取失败才返回 null。
      */
     public RunbookMatch findRunbook(String alertName) {
-        if (alertName == null || alertName.isBlank()) {
-            return null;
-        }
-        String lower = alertName.toLowerCase(Locale.ROOT);
-        for (Map.Entry<String, List<String>> entry : keywordMap.entrySet()) {
-            for (String keyword : entry.getValue()) {
-                if (lower.contains(keyword.toLowerCase(Locale.ROOT))) {
-                    String content = loadRunbookFile(entry.getKey());
-                    return content != null ? new RunbookMatch(entry.getKey(), content) : null;
+        if (alertName != null && !alertName.isBlank()) {
+            String lower = alertName.toLowerCase(Locale.ROOT);
+            for (Map.Entry<String, List<String>> entry : keywordMap.entrySet()) {
+                for (String keyword : entry.getValue()) {
+                    if (lower.contains(keyword.toLowerCase(Locale.ROOT))) {
+                        String content = loadRunbookFile(entry.getKey());
+                        if (content != null) {
+                            return new RunbookMatch(entry.getKey(), content);
+                        }
+                        // 命中手册文件读取失败 → 落到兜底手册
+                    }
                 }
             }
         }
-        return null;
+        String fallback = loadRunbookFile(FALLBACK_RUNBOOK);
+        return fallback != null ? new RunbookMatch(FALLBACK_RUNBOOK, fallback) : null;
     }
 
     /**

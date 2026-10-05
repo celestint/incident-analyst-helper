@@ -93,4 +93,66 @@ class LlmAnalysisExecutorTest {
         assertNull(executor.parseReport("```json\n{不是json}\n```"));
         assertNull(executor.parseReport("```json\n{\"confidence\":0.5}\n```"));
     }
+
+    /** 全空结果判定：数据类 {total:0} 与 countLogs 的 0 算全空，非空/手册/非 JSON 不算 */
+    @Test
+    void isEmptyResultDetectsEmptyToolResults() {
+        assertTrue(executor.isEmptyResult("{\"total\":0,\"items\":[]}"));
+        assertTrue(executor.isEmptyResult("0"));
+        assertFalse(executor.isEmptyResult("{\"total\":3,\"items\":[{}]}"));
+        assertFalse(executor.isEmptyResult("{\"matched\":true,\"file\":\"Fallback.md\",\"content\":\"...\"}"));
+        assertFalse(executor.isEmptyResult("非 JSON 文本"));
+        assertFalse(executor.isEmptyResult(null));
+    }
+
+    /** 兜底手册正常路径预算（3 类 × 2 窗口 ≈ 6 次空调用）不触发止损提示 */
+    @Test
+    void stopLossNotTriggeredWithinRunbookBudget() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        for (int i = 0; i < 6; i++) {
+            String content = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+            assertFalse(content.contains("禁止再调用工具"), "第 " + (i + 1) + " 次空调用不应注入止损提示");
+        }
+    }
+
+    /** 累计第 8 次空调用注入一次止损提示，后续调用不再重复注入 */
+    @Test
+    void stopLossTriggeredOnceAtThreshold() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        for (int i = 1; i <= 10; i++) {
+            String content = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+            if (i < 8) {
+                assertFalse(content.contains("禁止再调用工具"));
+            } else if (i == 8) {
+                assertTrue(content.contains("可观测数据持续为空，禁止再调用工具，直接输出最终 JSON 报告"));
+            } else {
+                assertFalse(content.contains("禁止再调用工具"), "止损提示只注入一次");
+            }
+        }
+    }
+
+    /** 失败调用不计数：失败与空调用穿插时，止损只按成功的全空次数累计 */
+    @Test
+    void stopLossIgnoresFailedCalls() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        for (int i = 0; i < 7; i++) {
+            executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+        }
+        String failed = executor.buildToolResultContent(false, null, "超时", state);
+        assertTrue(failed.startsWith("工具执行失败: 超时"));
+        String eighth = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+        assertTrue(eighth.contains("禁止再调用工具"), "失败不计入，第 8 次成功空调用才触发");
+    }
+
+    /** 非空成功结果不计数 */
+    @Test
+    void stopLossCountsOnlyEmptyResults() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        for (int i = 0; i < 9; i++) {
+            executor.buildToolResultContent(i % 2 == 0, i % 2 == 0 ? "{\"total\":5,\"items\":[{}]}" : null,
+                    "error", state);
+        }
+        String content = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+        assertFalse(content.contains("禁止再调用工具"), "只累计 1 次空调用，不触发止损");
+    }
 }

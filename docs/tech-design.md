@@ -91,9 +91,10 @@ frontend/src/
 - isNoise: boolean（事件摘要：是否噪音报警）
 - needsHandling: boolean（事件摘要：是否需要处理）
 - rootCauseHypothesis: string（当前报警产生原因）
-- confidence: number（0~1）
-- recommendedActions: string（json转化的字符串：`[{"priority":1,"action":"...","risk":"LOW|MEDIUM|HIGH"}]`，risk 标注该动作自身的执行风险）
-- judgmentLogic: string（判断逻辑：证据融入推理链的叙述文本，证据注明来源/数值/时间点，不单列证据表）
+- confidence: number（0~1，LLM 按评分锚点自评）
+- confidenceReason: string（置信度理由：LLM 按锚点档位给出的依据说明，前端仅 confidence < 0.6 时悬浮展示）
+- recommendedActions: string（json转化的字符串：`[{"priority":1,"action":"..."}]`；LLM 偶发输出纯字符串数组/缺 action 元素，落库前与接口返回前经 `RecommendedActionsNormalizer` 归一）
+- judgmentLogic: string（判断逻辑：证据融入推理链的叙述文本，"1. 内容"编号分行格式，证据注明来源/数值/时间点，不单列证据表）
 
 ### Evidence（证据，不是独立报告字段）
 证据通过两条途径体现：
@@ -137,7 +138,7 @@ SseEvent 是传输格式；落库事件同时写入 incident_events（带 seq，
 ## 关键技术点
 
 1. **SSE 实时推送**：后端用 `SseEmitter` 逐条推送事件。SseEmitter 非线程安全，用 `ConcurrentHashMap` 管理活跃连接。分析任务在独立线程池执行，不依赖 emitter 生命周期；emitter 超时/断线仅移除推送通道，分析继续，报告照常落库。
-2. **LangChain4j 工具调用**：用 `@Tool` 注解将模拟数据读取方法暴露给 LLM，Agent 按 Runbook 顺序调用。Runbook **不直接注入 system prompt**（内容可能变大），而是做成 `getRunbook(alertName)` 工具：LLM 第一步调用获取匹配手册，按手册步骤顺序调用后续工具；无匹配手册则进入探索模式自主分析。循环由后端**手动驱动**（`ChatModel.generate(messages, toolSpecs)` + 自行处理 toolExecutionRequest），不用 AiService 自动执行——事件落库和幂等控制需要插手每次工具调用。避免每个请求都创建新的模型实例。
+2. **LangChain4j 工具调用**：用 `@Tool` 注解将模拟数据读取方法暴露给 LLM，Agent 按 Runbook 顺序调用。Runbook **不直接注入 system prompt**（内容可能变大），而是做成 `getRunbook(alertName)` 工具：LLM 第一步调用获取匹配手册，按手册步骤顺序调用后续工具；关键词未命中时回退返回通用兜底手册 `Fallback.md`（告警名价值判断 + 指标/日志/调用链固定顺序 + 双窗口策略），不做自由规划；executor 另设保险丝：全空工具调用累计 ≥8 次注入一次止损提示，禁止模型继续调工具。循环由后端**手动驱动**（`ChatModel.generate(messages, toolSpecs)` + 自行处理 toolExecutionRequest），不用 AiService 自动执行——事件落库和幂等控制需要插手每次工具调用。避免每个请求都创建新的模型实例。
 3. **Runbook 驱动执行**：根据 alertName 匹配预定义步骤，每步调用工具并归一化为证据。
 4. **状态机与幂等**：`PENDING → RUNNING → COMPLETED/FAILED`，`POST /start` 仅允许 PENDING/FAILED。COMPLETED 直接返回已关联的报告，不重新执行 Agent。
 5. **MySQL 持久化**：Alert、Incident、Report 分表存储，通过外键关联。证据链和推荐操作使用 String 存储。本地开发复用本机已有 MySQL（Docker 默认开启，端口 3306），应用连 `localhost:3306`；不在仓库内维护 `docker-compose.yml`。表结构用 `schema.sql` 初始化（MyBatis 不自动建表）。
@@ -324,9 +325,10 @@ SseEvent 是传输格式；落库事件同时写入 incident_events（带 seq，
       "needsHandling": true,
       "rootCauseHypothesis": "dbservice1 存在异常进程持续占用 CPU，导致服务响应变慢，进而影响支付服务",
       "confidence": 0.85,
+      "confidenceReason": "指标与日志两类证据相互印证",
       "recommendedActions": [
-        { "priority": 1, "action": "检查 dbservice1 上的异常进程", "risk": "LOW" },
-        { "priority": 2, "action": "如确认异常进程，考虑重启该服务", "risk": "MEDIUM" }
+        { "priority": 1, "action": "检查 dbservice1 上的异常进程" },
+        { "priority": 2, "action": "如确认异常进程，考虑重启该服务" }
       ],
       "judgmentLogic": "getMetrics 显示 dbservice1 CPU 使用率 22:23 起升至 95%（来源 metrics）；getLogs 在同时段发现异常高 CPU 占用程序日志 3 条（来源 logs）；getSlowSpans 显示 order-service 调用 dbservice1 平均耗时从 50ms 升至 800ms（来源 trace）。三者时间吻合，得出上述根因假设。"
     }
@@ -447,25 +449,25 @@ event: message
 data: {"sequence":3,"type":"tool_call_start","data":{"tool":"getRunbook","args":{"alertName":"HighMemoryUsage"},"stepSeq":1}}
 
 event: message
-data: {"sequence":4,"type":"tool_call_result","data":{"tool":"getRunbook","success":true,"summary":"匹配到手册：HighMemoryUsage"}}
+data: {"sequence":4,"type":"tool_call_result","data":{"tool":"getRunbook","success":true,"summary":"查阅 1 文件","detail":"读取 HighMemoryUsage.md"}}
 
 event: message
 data: {"sequence":5,"type":"tool_call_start","data":{"tool":"getMetrics","args":{"service":"cacheservice","metricName":"memory"},"stepSeq":2}}
 
 event: message
-data: {"sequence":6,"type":"tool_call_result","data":{"tool":"getMetrics","success":true,"summary":"内存使用率 95%（23:00-23:10）"}}
+data: {"sequence":6,"type":"tool_call_result","data":{"tool":"getMetrics","success":true,"summary":"查阅 100 条指标","detail":"查找 23:00–23:10 服务 cacheservice 名称含 memory 的指标，找到 100 条。"}}
 
 event: message
-data: {"sequence":7,"type":"evidence_collected","data":{"source":"metrics","content":"内存使用率 95%（23:00-23:10）","timestamp":"2025-01-15 23:00:00"}}
+data: {"sequence":7,"type":"evidence_collected","data":{"source":"metrics","content":"最新值 95（23:10），峰值 95（23:05）；共 100 条","timestamp":"2025-01-15 23:00:00"}}
 
 event: message
 data: {"sequence":8,"type":"tool_call_start","data":{"tool":"getLogs","args":{"service":"cacheservice","keyword":"error"},"stepSeq":3}}
 
 event: message
-data: {"sequence":9,"type":"tool_call_result","data":{"tool":"getLogs","success":true,"summary":"OOM 日志 3 条"}}
+data: {"sequence":9,"type":"tool_call_result","data":{"tool":"getLogs","success":true,"summary":"查阅 3 条日志","detail":"查找 23:00–23:10 服务 cacheservice 包含 error 的日志，找到 3 条。"}}
 
 event: message
-data: {"sequence":10,"type":"evidence_collected","data":{"source":"logs","content":"OOM: java.lang.OutOfMemoryError","timestamp":"2025-01-15 23:08:00"}}
+data: {"sequence":10,"type":"evidence_collected","data":{"source":"logs","content":"最新（23:08）：OOM: java.lang.OutOfMemoryError；共 3 条","timestamp":"2025-01-15 23:08:00"}}
 
 event: message
 data: {"type":"text_delta","data":{"delta":"根据指标…"}}

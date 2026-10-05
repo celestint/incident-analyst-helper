@@ -38,7 +38,7 @@ public class AnalysisToolRegistry {
         return List.of(
                 ToolSpecification.builder()
                         .name("getRunbook")
-                        .description("按告警名匹配排查手册，返回手册全文或\"无匹配\"。分析第一步先调用它；命中手册后严格按手册步骤执行")
+                        .description("按告警名关键词匹配排查手册，关键词未命中时返回通用兜底手册。分析第一步先调用它；返回手册后严格按手册步骤执行")
                         .parameters(JsonObjectSchema.builder()
                                 .addStringProperty("alertName", "告警名，如 HighMemoryUsage")
                                 .required("alertName")
@@ -113,7 +113,7 @@ public class AnalysisToolRegistry {
             case "getRunbook" -> {
                 RunbookService.RunbookMatch match = runbookService.findRunbook(str(args.get("alertName")));
                 yield match != null ? Map.of("matched", true, "file", match.file(), "content", match.content())
-                        : Map.of("matched", false, "message", "无匹配手册，请自主规划排查路径");
+                        : Map.of("matched", false, "message", "手册文件加载失败，请基于告警信息直接输出分析报告");
             }
             case "getLogs" -> dataAnalyticsService.getLogs(
                     ctx.serviceOr(args), str(args.get("keyword")),

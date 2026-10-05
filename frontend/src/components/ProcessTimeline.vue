@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { Component } from 'vue'
 import {
-  ChatDotRound,
   CircleCloseFilled,
   DocumentChecked,
   Loading,
   Promotion,
-  Tools,
 } from '@element-plus/icons-vue'
 import type { SseEvent } from '@/types'
 
@@ -15,11 +14,14 @@ import type { SseEvent } from '@/types'
  * 聚合规则：
  * - 相邻的 tool_call_start + tool_call_result + 紧随的 evidence_collected 合并为一个可展开的"调用工具"步骤
  * - 历史失败尝试（非末次尝试）整轮不展示，只渲染末次尝试：开始分析 / 思考（可折叠）/ 工具步骤 / 错误（红色）/ 报告完成
- * 折叠规则：步骤默认折叠；live（RUNNING）时"执行中"的工具步骤自动展开、出结果自动收起
+ * 折叠规则：步骤默认折叠且不自动展开（执行中的工具只显示"· 执行中"），非 live 一律收起；
  * 呈现规则：每步「彩色图标 + 名称 · 状态」；无时间线圆点/竖线，图标与"分析过程"标题左对齐；
  *          折叠头单行省略，避免长摘要换行撑爆固定行高（字重叠）
+ * 流式规则：live 且 streamingThought 非空时，步骤列表末尾渲染流式中的「思考」——
+ *          标题右侧固定单行框只显示最新一行（替换式），agent_thought 落库后由正常思考步骤接替；
+ *          live 且无流式思考内容时，步骤末尾渲染「分析执行中…」加载行（工具执行/等待间隙的进行中反馈），两者不同时出现
  */
-const props = defineProps<{ events: SseEvent[]; live?: boolean }>()
+const props = defineProps<{ events: SseEvent[]; live?: boolean; streamingThought?: string }>()
 
 interface ToolStep {
   kind: 'tool'
@@ -181,6 +183,12 @@ const truncate = (text: string, max = 60) => {
   return text.length > max ? text.slice(0, max) + '…' : text
 }
 
+/** 流式思考框内容：只显示最新一个非空行，随流式替换 */
+const latestStreamingLine = computed(() => {
+  const lines = (props.streamingThought ?? '').split('\n').map(l => l.trim()).filter(Boolean)
+  return lines[lines.length - 1] ?? ''
+})
+
 const prettyArgs = (args: string) => {
   try {
     return JSON.stringify(JSON.parse(args), null, 2)
@@ -198,13 +206,16 @@ const toolHeader = (step: ToolStep) => {
   return `调用工具 ${step.tool}`
 }
 
-/** 步骤图标（颜色走 token） */
+/**
+ * 步骤图标（颜色走 token）。
+ * 思考/工具两个图标不用 EP 现成图标（Opportunity 形似热气球、Search 镜面过大），
+ * 改为模板内联 SVG 直绘（灯泡 / 小镜面放大镜），见模板中 step-icon 对应分支。
+ */
 const stepIcon = (step: Step) => {
   if (step.kind === 'tool' && step.success === null) return Loading
-  const map = {
+  // 思考/已完成工具的图标由模板内联 SVG 直绘，不会走到这里
+  const map: Partial<Record<Step['kind'], Component>> = {
     info: Promotion,
-    thought: ChatDotRound,
-    tool: Tools,
     error: CircleCloseFilled,
     final: DocumentChecked,
   }
@@ -217,19 +228,15 @@ const toolStatus = (step: ToolStep) => {
   return step.success ? { text: '成功', cls: 'is-success' } : { text: '失败', cls: 'is-failed' }
 }
 
-/** 展开的折叠项 key（默认全折叠；live 模式下自动展开"执行中"的工具步骤） */
+/** 展开的折叠项 key（默认全折叠，不自动展开；仅非 live 时整体收起，live 时保留用户手动展开） */
 const expanded = ref<number[]>([])
 
 watch(
-  () => [props.events, props.live] as const,
+  () => props.live,
   () => {
     if (!props.live) {
       expanded.value = []
-      return
     }
-    expanded.value = steps.value
-      .filter(s => s.kind === 'tool' && s.success === null)
-      .map(s => s.key)
   },
   { immediate: true }
 )
@@ -247,14 +254,37 @@ const toggleExpanded = (key: number, open: boolean) => {
   <div class="steps">
     <div v-for="step in steps" :key="step.key" class="step">
       <el-icon class="step-icon" :class="`step-icon--${step.kind}`" :size="16">
-        <component :is="stepIcon(step)" :class="{ 'is-spinning': step.kind === 'tool' && step.success === null }" />
+        <!-- 思考：灯泡（EP 无贴合图标，模板内联 SVG 直绘，尺寸由 el-icon 统一到 1em） -->
+        <svg
+          v-if="step.kind === 'thought'"
+          viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+        >
+          <path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.3 2.2h4.6c.2-.9.6-1.7 1.3-2.2A6 6 0 0 0 12 3z" />
+          <path d="M9 18h6" />
+          <path d="M10 21h4" />
+        </svg>
+        <!-- 调用工具：放大镜（小镜面 + 长柄，强调"查询取证"） -->
+        <svg
+          v-else-if="step.kind === 'tool' && step.success !== null"
+          viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+        >
+          <circle cx="10.5" cy="10.5" r="5.5" />
+          <path d="M20.5 20.5l-5.6-5.6" />
+        </svg>
+        <component
+          v-else
+          :is="stepIcon(step)"
+          :class="{ 'is-spinning': step.kind === 'tool' && step.success === null }"
+        />
       </el-icon>
 
       <!-- 开始分析 / 续跑分析：仅图标 + 名称 -->
       <span v-if="step.kind === 'info'" class="step-title">{{ step.label }}</span>
 
       <div v-else class="step-content">
-        <!-- 工具步骤：合并 start/result/evidence，默认收起，live 时执行中自动展开 -->
+        <!-- 工具步骤：合并 start/result/evidence，默认收起不自动展开，可手动展开 -->
         <template v-if="step.kind === 'tool'">
           <el-collapse
             class="tool-collapse"
@@ -323,6 +353,33 @@ const toggleExpanded = (key: number, open: boolean) => {
         </p>
       </div>
     </div>
+
+    <!-- 流式中的思考：标题右侧固定单行框，只显示最新一行，落库后由上方正常思考步骤接替 -->
+    <div v-if="live && latestStreamingLine" class="step">
+      <el-icon class="step-icon step-icon--thought" :size="16">
+        <svg
+          viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+        >
+          <path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.3 2.2h4.6c.2-.9.6-1.7 1.3-2.2A6 6 0 0 0 12 3z" />
+          <path d="M9 18h6" />
+          <path d="M10 21h4" />
+        </svg>
+      </el-icon>
+      <div class="step-content streaming-thought">
+        <span class="step-title">思考</span>
+        <span class="streaming-frame">{{ latestStreamingLine }}<span class="streaming-cursor">▍</span></span>
+      </div>
+    </div>
+
+    <!-- 工具执行/等待期间的加载行：live 且无流式思考时显示（与思考流式框互补、不同时出现），
+         让"长时间无事件"的间隙也有进行中反馈 -->
+    <div v-else-if="live" class="step">
+      <el-icon class="step-icon step-icon--info" :size="16">
+        <Loading class="is-spinning" />
+      </el-icon>
+      <span class="step-title loading-text">分析执行中…</span>
+    </div>
   </div>
 </template>
 
@@ -343,19 +400,21 @@ const toggleExpanded = (key: number, open: boolean) => {
 
 .step-icon {
   flex-shrink: 0;
-  margin-top: 2px;
+  /* 与 14px 文字行（行高约 24px）垂直居中：16px 图标 + 4px ≈ 视觉对齐 */
+  margin-top: 4px;
 }
 
 .step-icon--info {
   color: var(--color-primary);
 }
 
+/* 思考/工具步骤用中性灰绿：语义色只留给 开始/执行中(苔绿)、错误(红)、完成(绿) */
 .step-icon--thought {
-  color: var(--color-warning);
+  color: var(--color-text-secondary);
 }
 
 .step-icon--tool {
-  color: var(--color-warning);
+  color: var(--color-text-secondary);
 }
 
 .step-icon--error {
@@ -421,11 +480,13 @@ const toggleExpanded = (key: number, open: boolean) => {
   min-width: 0;
 }
 
-/* 折叠头压成单行高度；标题单行省略，防止长摘要换行撑爆行高导致文字重叠 */
-.tool-collapse :deep(.el-collapse-item__header),
-.thought-collapse :deep(.el-collapse-item__header) {
+/* 折叠头压成单行高度；标题单行省略，防止长摘要换行撑爆行高导致文字重叠。
+   .steps 前缀抬高特异性 + min-height 抵消 EP 的 min-height:48px 与 AnalysisPane 的 36px 覆盖 */
+.steps .tool-collapse :deep(.el-collapse-item__header),
+.steps .thought-collapse :deep(.el-collapse-item__header) {
   --el-collapse-header-height: 24px;
   height: 24px;
+  min-height: 24px;
   padding: 0;
   font-size: 14px;
   color: var(--color-text-regular);
@@ -467,5 +528,48 @@ const toggleExpanded = (key: number, open: boolean) => {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 流式中的思考：标题 + 右侧固定单行框（高度固定，内容替换式更新） */
+.streaming-thought {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.streaming-frame {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  line-height: 24px;
+  padding: 0 8px;
+  background: var(--el-bg-color);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--color-text-regular);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streaming-cursor {
+  color: var(--color-primary);
+  animation: cursor-blink 1s infinite;
+}
+
+.loading-text {
+  color: var(--color-text-regular);
+}
+
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-cursor {
+    animation: none;
+  }
 }
 </style>

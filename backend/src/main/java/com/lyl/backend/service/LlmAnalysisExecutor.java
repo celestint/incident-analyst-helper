@@ -62,6 +62,18 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
     private static final String DUPLICATE_CALL_HINT =
             "\n\n[系统提示] 相同参数的调用已执行过，请基于以上结果继续推理，不要重复调用相同参数的工具。";
 
+    /**
+     * 全空结果累计止损阈值：大于兜底手册正常路径预算（3 类数据 × 2 窗口 ≈ 6 次空调用），
+     * 守手册的模型不受干扰，只拦失控扩窗循环。只统计成功执行且结果全空的调用，失败不计。
+     */
+    private static final int EMPTY_RESULT_STOP_LOSS = 8;
+
+    /**
+     * 累计全空结果达到止损阈值时附加在工具结果后的一次性提示（写在工具结果消息内，理由同上）。
+     */
+    private static final String STOP_LOSS_HINT =
+            "\n\n[系统提示] 可观测数据持续为空，禁止再调用工具，直接输出最终 JSON 报告。";
+
     private final LlmChatClient llmChatClient;
     private final AnalysisToolRegistry registry;
     private final IncidentEventService eventService;
@@ -147,6 +159,7 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
         // 已成功执行过的调用（tool|args → 结果文本）：模型（尤其是小参数模型）在结果不符合预期时
         // 容易连续输出相同思考+相同工具调用，重复调用直接复用结果，不再执行、不落库、不消耗 stepSeq
         Map<String, String> executedResults = new HashMap<>();
+        StopLossState stopLoss = new StopLossState();
         for (PendingTool tool : pending) {
             String cached = executedResults.get(dedupKey(tool.request()));
             if (cached != null) {
@@ -154,7 +167,7 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
                         tool.request().id(), tool.request().name(), cached + DUPLICATE_CALL_HINT));
                 continue;
             }
-            String result = executeTool(incident, tool.request(), tool.stepSeq(), ctx, messages);
+            String result = executeTool(incident, tool.request(), tool.stepSeq(), ctx, messages, stopLoss);
             if (result != null) {
                 executedResults.put(dedupKey(tool.request()), result);
             }
@@ -200,7 +213,7 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
                     continue;
                 }
                 stepSeq++;
-                String result = executeTool(incident, request, stepSeq, ctx, messages);
+                String result = executeTool(incident, request, stepSeq, ctx, messages, stopLoss);
                 if (result != null) {
                     executedResults.put(dedupKey(request), result);
                 }
@@ -394,7 +407,8 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
                 }
             });
         } catch (Exception e) {
-            throw new IllegalStateException("LLM 调用失败或超时: " + e.getMessage(), e);
+            log.error("LLM 调用失败, incident {}: {}", incident.getId(), e.getMessage(), e);
+            throw new IllegalStateException(e.getMessage(), e);
         }
     }
 
@@ -403,7 +417,7 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
      * 证据事件落库 → 结果回填消息列表。成功时返回结果文本（供重复调用检测复用），失败返回 null。
      */
     private String executeTool(Incident incident, ToolExecutionRequest request, int stepSeq,
-                               ToolContext ctx, List<ChatMessage> messages) {
+                               ToolContext ctx, List<ChatMessage> messages, StopLossState stopLoss) {
         String toolName = request.name();
         String argsJson = request.arguments();
 
@@ -485,8 +499,58 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
 
         messages.add(ToolExecutionResultMessage.from(
                 request.id(), toolName,
-                success ? resultText : "工具执行失败: " + error));
+                buildToolResultContent(success, resultText, error, stopLoss)));
         return success ? resultText : null;
+    }
+
+    /**
+     * 组装回填给模型的工具结果文本：失败带错误前缀；成功且结果全空时累计计数，
+     * 累计达到止损阈值后一次性附加止损提示（此后不再附加），拦截失控扩窗循环
+     */
+    String buildToolResultContent(boolean success, String resultText, String error, StopLossState stopLoss) {
+        String content = success ? resultText : "工具执行失败: " + error;
+        if (!success || stopLoss == null) {
+            return content;
+        }
+        if (isEmptyResult(resultText)) {
+            stopLoss.emptyCount++;
+        }
+        if (stopLoss.emptyCount >= EMPTY_RESULT_STOP_LOSS && !stopLoss.injected) {
+            stopLoss.injected = true;
+            log.info("Empty-result stop loss triggered after {} empty tool calls", stopLoss.emptyCount);
+            return content + STOP_LOSS_HINT;
+        }
+        return content;
+    }
+
+    /**
+     * 工具结果是否全空：数据类工具 {total, items} 的 total=0、countLogs 的数值 0 记全空；
+     * 其他结构（手册文本、非 JSON、无 total 字段）不算。失败的调用（resultText=null）不计。
+     */
+    boolean isEmptyResult(String resultText) {
+        if (resultText == null || resultText.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(resultText);
+            if (node.isNumber()) {
+                return node.asInt() == 0;
+            }
+            return node.path("total").isNumber() && node.get("total").asInt() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 止损状态：一次 run/resume 的工具循环共享（resume 重新计数，不跨尝试累计）。
+     * 包私有以便单元测试构造。
+     */
+    static final class StopLossState {
+        /** 成功执行且结果全空的调用累计次数 */
+        int emptyCount = 0;
+        /** 止损提示是否已注入（只注入一次） */
+        boolean injected = false;
     }
 
     /**

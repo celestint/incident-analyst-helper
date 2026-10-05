@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { Warning } from '@element-plus/icons-vue'
 import { incidentApi } from '@/api'
 import { ElMessage } from 'element-plus'
@@ -13,6 +13,7 @@ import type { Alert, Incident, SseEvent, AnalysisReport } from '@/types'
  * 右栏分析面板：吸顶状态行（级别+服务+告警名+状态）+ 分析过程 + 分析报告。
  * 未选中时显示空态提示；RUNNING 走 SSE（重放+实时），结束态拉历史事件。
  * 状态行满宽平铺（无边距无阴影），滚动时内容从其下方穿过。
+ * 自动滚动：内容超屏且用户在底部附近时跟随新内容滚到底；上滑暂停跟随，滑回底部恢复，切换告警重置为跟随。
  */
 const props = defineProps<{ incidentId: number | null; alert?: Alert | null }>()
 const emit = defineEmits<{ (e: 'finished'): void }>()
@@ -20,11 +21,34 @@ const emit = defineEmits<{ (e: 'finished'): void }>()
 // 仅滚动时显示滚动条
 const { scrolling: paneScrolling, onScroll: onPaneScroll } = useScrollFlash()
 
+// 自动滚动跟随：距底 < 60px 视为"在底部"，内容增长时自动滚到底；
+// 用户上滑（离开底部）暂停跟随不被拉回，滑回底部恢复；切换告警重置为跟随
+const FOLLOW_BOTTOM_THRESHOLD = 60
+const paneRef = ref<HTMLElement | null>(null)
+const followBottom = ref(true)
+
+const handlePaneScroll = () => {
+  onPaneScroll()
+  if (!paneRef.value) return
+  followBottom.value =
+    paneRef.value.scrollHeight - paneRef.value.scrollTop - paneRef.value.clientHeight < FOLLOW_BOTTOM_THRESHOLD
+}
+
+/** 跟随中且内容增长后滚到底（nextTick 等 DOM 渲染完成再取 scrollHeight） */
+const scrollToBottomIfFollowing = async () => {
+  if (!followBottom.value) return
+  await nextTick()
+  const el = paneRef.value
+  if (el && followBottom.value) {
+    el.scrollTop = el.scrollHeight
+  }
+}
+
 const incidentInfo = ref<Incident | null>(null)
 const reportInfo = ref<AnalysisReport | null>(null)
 /** 已落库事件（RUNNING 来自 SSE，结束态来自历史接口） */
 const events = ref<SseEvent[]>([])
-/** text_delta 流式缓冲区（不落库，report_finalized 到达即作废） */
+/** text_delta 流式缓冲区（不落库；每收到落库事件即清空，只保留当前流式轮次，```json 界前为思考、界后为报告块） */
 const streamingText = ref('')
 const reconnecting = ref(false)
 const loading = ref(false)
@@ -55,7 +79,8 @@ const loadIncident = async () => {
       initSse()
     } else {
       closeSse()
-      processExpanded.value = []
+      // FAILED 也默认展开，让用户直接看到报错位置
+      processExpanded.value = data.status === 'FAILED' ? ['process'] : []
       await loadHistoryEvents()
     }
   } catch (err: any) {
@@ -96,6 +121,8 @@ const initSse = () => {
     if (seq == null || seq <= lastSeq) return
     lastSeq = seq
     events.value = [...events.value, data]
+    // 落库即一轮流式结束：清空缓冲，只保留当前正在流式的轮次，避免与已显示步骤重复
+    streamingText.value = ''
 
     // 报告定稿：用完整报告替换流式半截文本，重载详情
     if (data.type === 'report_finalized') {
@@ -142,6 +169,7 @@ watch(
     events.value = []
     streamingText.value = ''
     lastSeq = 0
+    followBottom.value = true
     if (props.incidentId) {
       loadIncident()
     }
@@ -149,10 +177,30 @@ watch(
   { immediate: true }
 )
 
+// 内容增长（步骤事件/流式文本/报告/过程折叠展开）时按跟随状态滚到底
+watch(
+  () => [events.value.length, streamingText.value, reportInfo.value, processExpanded.value],
+  scrollToBottomIfFollowing
+)
+
 /** 过滤 LLM 输出中 action 为空的脏数据条目，避免渲染出空行 */
 const sopActions = computed(() =>
   (reportInfo.value?.recommendedActions ?? []).filter(a => (a?.action ?? '').trim() !== '')
 )
+
+/** 报告块起始标记：prompt 约定最终报告以 ```json 代码块结尾 */
+const JSON_FENCE = '```json'
+
+/** 流式缓冲拆分：```json 界前为当前轮思考叙述（在「思考」步骤局部显示），界后为报告块（底部框显示） */
+const streamingThought = computed(() => {
+  const idx = streamingText.value.indexOf(JSON_FENCE)
+  return (idx >= 0 ? streamingText.value.slice(0, idx) : streamingText.value).trim()
+})
+
+const streamingReport = computed(() => {
+  const idx = streamingText.value.indexOf(JSON_FENCE)
+  return idx >= 0 ? streamingText.value.slice(idx) : ''
+})
 
 const handleResume = async () => {  if (!incidentInfo.value) return
   loading.value = true
@@ -171,9 +219,10 @@ const handleResume = async () => {  if (!incidentInfo.value) return
 
 <template>
   <div
+    ref="paneRef"
     class="analysis-pane"
     :class="{ 'is-scrolling': paneScrolling }"
-    @scroll="onPaneScroll"
+    @scroll="handlePaneScroll"
   >
     <!-- 未选中：空态提示 -->
     <div v-if="!incidentId" class="empty-state">
@@ -181,48 +230,49 @@ const handleResume = async () => {  if (!incidentInfo.value) return
     </div>
 
     <template v-else>
-      <!-- 吸顶状态行：级别 + 服务 + 告警名 + 状态，满宽平铺，滚动时常驻 -->
+      <!-- 吸顶状态栏：第一行 级别+服务+告警名+状态，第二行告警起止时间；两行总高与左侧告警卡片一致 -->
       <div class="status-bar" v-loading="loading">
-        <template v-if="alert">
-          <el-tag :type="severityTagType(alert.severity)" size="small" class="no-shrink">
-            {{ severityLabel(alert.severity) }}
+        <div class="status-main">
+          <template v-if="alert">
+            <el-tag :type="severityTagType(alert.severity)" size="small" class="no-shrink">
+              {{ severityLabel(alert.severity) }}
+            </el-tag>
+            <el-tag type="info" effect="plain" size="small" class="no-shrink">{{ alert.service }}</el-tag>
+            <el-tooltip :content="alert.alertName" placement="top" :show-after="300">
+              <strong class="status-name">{{ alert.alertName }}</strong>
+            </el-tooltip>
+          </template>
+          <el-tag v-if="reconnecting" type="warning" size="small" class="no-shrink">连接中断，重连中…</el-tag>
+          <el-tag :type="statusTagType(incidentInfo?.status ?? '')" size="small" class="no-shrink">
+            {{ statusLabel(incidentInfo?.status ?? '') }}
           </el-tag>
-          <el-tag type="info" effect="plain" size="small" class="no-shrink">{{ alert.service }}</el-tag>
-          <el-tooltip :content="alert.alertName" placement="top" :show-after="300">
-            <strong class="status-name">{{ alert.alertName }}</strong>
-          </el-tooltip>
-        </template>
-        <el-tag v-if="reconnecting" type="warning" size="small" class="no-shrink">连接中断，重连中…</el-tag>
-        <el-tag :type="statusTagType(incidentInfo?.status ?? '')" size="small" class="no-shrink">
-          {{ statusLabel(incidentInfo?.status ?? '') }}
-        </el-tag>
-        <el-button
-          v-if="incidentInfo?.status === 'FAILED'"
-          type="primary"
-          size="small"
-          class="retry-button"
-          @click="handleResume"
-          :loading="loading"
-        >
-          重试（从失败点继续）
-        </el-button>
+          <el-button
+            v-if="incidentInfo?.status === 'FAILED'"
+            type="primary"
+            size="small"
+            class="retry-button"
+            @click="handleResume"
+            :loading="loading"
+          >
+            重试
+          </el-button>
+        </div>
+        <!-- 第二行：告警起止时间；endsAt 为空表示未结束，显示"至今" -->
+        <p v-if="alert" class="status-time">{{ alert.startsAt }} ~ {{ alert.endsAt || '至今' }}</p>
       </div>
 
-      <!-- 分析过程：RUNNING 默认展开，结束态默认折叠 -->
+      <!-- 分析过程：RUNNING/FAILED 默认展开（失败需看到报错），其余结束态默认折叠 -->
       <div class="section">
         <el-collapse v-model="processExpanded">
           <el-collapse-item title="分析过程" name="process">
-            <ProcessTimeline :events="events" :live="incidentInfo?.status === 'RUNNING'" />
-            <el-alert
-              v-if="incidentInfo?.status === 'RUNNING' && events.length === 0"
-              type="info"
-              :closable="false"
-            >
-              等待分析结果...
-            </el-alert>
-            <!-- 流式输出区：report_finalized 到达后被完整报告替换 -->
-            <div v-if="incidentInfo?.status === 'RUNNING' && streamingText" class="streaming-box">
-              <p class="streaming-text">{{ streamingText }}<span class="cursor">▍</span></p>
+            <ProcessTimeline
+              :events="events"
+              :live="incidentInfo?.status === 'RUNNING'"
+              :streaming-thought="streamingThought"
+            />
+            <!-- 流式输出区：仅报告块（```json 起）在此流式，report_finalized 到达后被完整报告替换 -->
+            <div v-if="incidentInfo?.status === 'RUNNING' && streamingReport" class="streaming-box">
+              <p class="streaming-text">{{ streamingReport }}<span class="cursor">▍</span></p>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -245,7 +295,7 @@ const handleResume = async () => {  if (!incidentInfo.value) return
         <p>
           <strong>事件摘要：</strong>
           <el-tag :type="reportInfo.isNoise ? 'info' : 'danger'" size="small">
-            {{ reportInfo.isNoise ? '噪音报警' : '非噪音报警' }}
+            {{ reportInfo.isNoise ? '噪音' : '非噪音' }}
           </el-tag>
           <el-tag :type="reportInfo.needsHandling ? 'warning' : 'success'" size="small" class="report-tag">
             {{ reportInfo.needsHandling ? '需要处理' : '不需要处理' }}
@@ -304,17 +354,35 @@ const handleResume = async () => {  if (!incidentInfo.value) return
   justify-content: center;
 }
 
-/* 吸顶状态行：满宽平铺，无边距/圆角/阴影/分隔线 */
+/* 吸顶状态栏：满宽平铺，无边距/圆角/阴影/分隔线；两行（主行 + 起止时间行）总高对齐左侧告警卡片 */
 .status-bar {
   position: sticky;
   top: 0;
   z-index: 10;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
   background: var(--el-bg-color);
   flex-shrink: 0;
+}
+
+.status-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 第二行：告警起止时间，灰色小字；行高使两行总高与左侧告警卡片（约 77px）一致 */
+.status-time {
+  margin: 0;
+  font-size: 12px;
+  line-height: 24px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .no-shrink {
@@ -336,7 +404,7 @@ const handleResume = async () => {  if (!incidentInfo.value) return
 }
 
 .section {
-  margin: 16px 16px 0;
+  margin: 12px 16px 0;
 }
 
 /* 去掉折叠组件自带的分隔线 */
@@ -347,6 +415,9 @@ const handleResume = async () => {  if (!incidentInfo.value) return
 /* "分析过程"标题与"事件摘要"同字号（14px 加粗） */
 .section :deep(.el-collapse-item__header) {
   border-bottom: none;
+  /* EP 默认 48px（且带 min-height:48px），文字居中上下各空一半，视觉空行过大，压到 36px */
+  height: 36px;
+  min-height: 36px;
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-primary);
@@ -365,8 +436,13 @@ const handleResume = async () => {  if (!incidentInfo.value) return
   border-bottom: none;
 }
 
+/* EP 内容区自带 25px 底部内边距，与报告区外边距叠加导致空行过大，收掉 */
+.section :deep(.el-collapse-item__content) {
+  padding-bottom: 0;
+}
+
 .report-section {
-  margin: 16px;
+  margin: 12px 16px 16px;
 }
 
 .report-section p {
@@ -413,7 +489,7 @@ const handleResume = async () => {  if (!incidentInfo.value) return
 .streaming-box {
   margin-top: 16px;
   padding: 12px;
-  background: var(--color-bg-page);
+  background: var(--el-bg-color);
   border-radius: 6px;
 }
 

@@ -16,6 +16,7 @@
 - 库名：`incident_analyst`（不存在需先创建：`CREATE DATABASE incident_analyst DEFAULT CHARACTER SET utf8mb4;`）
 - 账号：`mysqluser` / `mysqlpass123`
 - 表结构：由 `backend/src/main/resources/schema.sql` 初始化（首次启动前手动执行，或确认表已存在）
+- 既有库升级：schema.sql 的建表语句带 `IF NOT EXISTS`，新增列不会自动加到老表——升级代码后按 schema.sql 末尾注释手动执行对应 `ALTER`（如 P3 新增的 `analysis_report.confidence_reason` 列），否则分析会在报告落库时报错
 
 ## 后端启动（端口 8080）
 
@@ -55,13 +56,36 @@ Vite 已配置代理（见 `frontend/vite.config.ts`）：`/api` → `http://loc
 
 ## 造测试数据
 
-接口告警（外部系统入口，前端不直接用）：
+### 可观测数据 CSV（后端启动依赖）
 
+`backend/src/main/resources/mock-data/` 下的 `logs/`、`metrics/`、`traces/` 三个目录里的 CSV（`*_0304.csv`）来自 **AIOps 2021 挑战赛数据集**（网上搜索 "AIOps 2021 挑战赛 数据集" 可找到），文件名中的 `0304` 为数据集日期标记。
+
+- 这批文件体积大（合计约 1.5 GB），**不进 git**（目录靠 `.gitkeep` 保留），需要各自放到对应目录，文件名保持 `*_0304.csv`（代码里 `DataAnalyticsConfig` 用 `log_*_0304.csv` 等通配符加载）
+- `groundtruth/aiops21_groundtruth_0304.csv`（根因标注，几 KB）随仓库走，不用另下
+- **缺了这批 CSV 后端会启动失败**（DuckDB 建视图时 `read_csv` 报错）；只想看前端 / mock 执行器流程的，也必须先放好数据
+
+### 排查手册（runbooks）
+
+`backend/src/main/resources/mock-data/runbooks/` 下的 Markdown 手册供 LLM 分析执行器使用：分析第一步调用 `getRunbook` 获取手册，之后严格按手册步骤执行。
+
+- **匹配规则**：`mock-data/runbook-keywords.json` 维护「手册文件 → 关键词列表」，告警名（忽略大小写）包含任一关键词即命中对应手册（如告警名含 `memory` 命中 `HighMemoryUsage.md`）
+- **未命中走兜底**：关键词未命中（或命中手册文件读取失败）时回退返回通用兜底手册 `Fallback.md`——先做告警名价值判断（明显测试/无意义名不调数据工具直接出报告），再按「指标 → 日志 → 调用链」固定顺序、告警窗口/基线窗口双窗口策略排查；三类数据双窗口均空则停止调工具直接出报告
+- **新增专用手册**：在 `runbooks/` 下新建 `.md` 并在 `runbook-keywords.json` 加对应关键词即可，无需改代码；建议结构对齐现有手册（原则 / 窗口定义 / 分步判断 / 分析结果）
+
+### 告警与分析
+
+接口告警（外部系统入口，前端不直接用；`endsAt` 可选，为空表示告警未结束）：
 ```bash
 curl -X POST http://localhost:8080/api/alerts \
   -H "Content-Type: application/json" \
-  -d '{"alertName":"DatabaseConnectionPoolExhausted","severity":"critical","service":"mysql-prod-01","startsAt":"2026-10-03 09:15:00"}'
+  -d '{"alertName":"DatabaseConnectionPoolExhausted","severity":"critical","service":"mysql-prod-01","startsAt":"2026-10-03 09:15:00","endsAt":"2026-10-03 10:30:00"}'
 ```
+
+**重复 POST 的行为**：同一告警（服务 + 告警名 + 开始时间相同，唯一键）再次 POST 时——
+- 携带 `endsAt` 且有变化：**更新**已有告警的结束时间，返回 `updated: true`（用于"告警结束"通知）
+- 未携带 `endsAt` 或值没变：拒绝，报"该告警已存在，不能重复插入"
+
+`endsAt` 传空字符串与不传等价（入库统一为 null，表示未结束）；分析页状态栏第二行显示「开始时间 ~ 结束时间」，未结束显示「开始时间 ~ 至今」。
 
 触发分析（`alertId` 替换为上一步返回的 id；FAILED 状态下再次调用即重新分析）：
 

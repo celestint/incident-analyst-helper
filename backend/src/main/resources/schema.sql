@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS alert (
     severity VARCHAR(64) NOT NULL,
     service VARCHAR(191) NOT NULL,
     starts_at VARCHAR(19) NOT NULL,
+    ends_at VARCHAR(19) DEFAULT NULL COMMENT '告警结束时间，为空表示未结束',
     labels TEXT,
     incident_id BIGINT UNSIGNED DEFAULT NULL,
     PRIMARY KEY (id),
@@ -24,6 +25,8 @@ CREATE TABLE IF NOT EXISTS analysis_report (
 
 -- 既有库升级（MySQL 不支持 ADD COLUMN IF NOT EXISTS，已建过 analysis_report 表时手动执行一次）：
 -- ALTER TABLE analysis_report ADD COLUMN confidence_reason TEXT COMMENT '置信度理由：LLM 按评分锚点给出的依据说明' AFTER confidence;
+-- 已建过 alert 表时手动执行一次（T7 告警结束时间）：
+-- ALTER TABLE alert ADD COLUMN ends_at VARCHAR(19) DEFAULT NULL COMMENT '告警结束时间，为空表示未结束' AFTER starts_at;
 
 CREATE TABLE IF NOT EXISTS incident (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
