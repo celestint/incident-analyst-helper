@@ -27,9 +27,11 @@ request.interceptors.response.use(
     // 拦截器把 AxiosResponse 换成 ApiResponse，调用方以 res.data 取业务数据
     return res as unknown as typeof response
   },
+  // HTTP 非 2xx（404/409/500 等）：后端响应体仍是 { code, message }，取出业务消息供 err.message 展示
   error => {
-    console.error('Request Error:', error.message)
-    return Promise.reject(error)
+    const message = error?.response?.data?.message
+    console.error('Request Error:', message || error.message)
+    return Promise.reject(new Error(message || error.message))
   }
 )
 
@@ -38,3 +40,5 @@ export default request
 // 统一出口：页面从 '@/api' 导入各业务 API
 export { alertApi } from './alert'
 export { incidentApi } from './incident'
+export { statsApi } from './stats'
+export type { EvaluationQuery, DrillQuery } from './stats'

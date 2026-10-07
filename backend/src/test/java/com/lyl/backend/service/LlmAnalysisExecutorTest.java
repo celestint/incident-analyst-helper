@@ -155,4 +155,73 @@ class LlmAnalysisExecutorTest {
         String content = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
         assertFalse(content.contains("禁止再调用工具"), "只累计 1 次空调用，不触发止损");
     }
+
+    /** 首次全空结果注入空结果纠偏提示（total=0≠数据缺失），后续空调用不重复注入 */
+    @Test
+    void emptyResultHintInjectedOnceOnFirstEmpty() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        String first = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+        assertTrue(first.contains("不等于\"数据缺失\""), "首次空调用应注入空结果纠偏提示");
+        assertTrue(first.contains("未发现"), "纠偏提示应给出'未发现'表述示例");
+        for (int i = 0; i < 5; i++) {
+            String content = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+            assertFalse(content.contains("不等于\"数据缺失\""), "纠偏提示只注入一次");
+        }
+    }
+
+    /** 非空成功结果与失败调用不注入空结果纠偏提示 */
+    @Test
+    void emptyResultHintOnlyForEmptySuccess() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        String nonEmpty = executor.buildToolResultContent(true, "{\"total\":3,\"items\":[{}]}", null, state);
+        assertFalse(nonEmpty.contains("不等于\"数据缺失\""), "非空结果不注入纠偏提示");
+        String failed = executor.buildToolResultContent(false, null, "超时", state);
+        assertFalse(failed.contains("不等于\"数据缺失\""), "失败调用不注入纠偏提示");
+        String firstEmpty = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+        assertTrue(firstEmpty.contains("不等于\"数据缺失\""), "此前的非空/失败调用后，首次空调用仍应注入");
+    }
+
+    /** 空结果纠偏提示与止损提示独立：纠偏在第 1 次空调用、止损仍在第 8 次空调用 */
+    @Test
+    void emptyResultHintIndependentOfStopLoss() {
+        var state = new LlmAnalysisExecutor.StopLossState();
+        for (int i = 1; i <= 8; i++) {
+            String content = executor.buildToolResultContent(true, "{\"total\":0,\"items\":[]}", null, state);
+            if (i == 1) {
+                assertTrue(content.contains("不等于\"数据缺失\""), "第 1 次空调用注入纠偏提示");
+                assertFalse(content.contains("禁止再调用工具"), "远未到止损阈值");
+            } else if (i < 8) {
+                assertFalse(content.contains("不等于\"数据缺失\""), "纠偏提示只注入一次");
+                assertFalse(content.contains("禁止再调用工具"));
+            } else {
+                assertTrue(content.contains("禁止再调用工具"), "第 8 次空调用照常触发止损");
+                assertFalse(content.contains("不等于\"数据缺失\""), "纠偏提示不随止损重复注入");
+            }
+        }
+    }
+
+    /** 参数规范化：键序不同内容相同的参数必须得到相同的判重键 */
+    @Test
+    void canonicalArgsNormalizesKeyOrder() {
+        String a = executor.canonicalArgs("{\"service\":\"apache01\",\"startTime\":1,\"endTime\":2,\"limit\":100}");
+        String b = executor.canonicalArgs("{\"endTime\":2,\"limit\":100,\"service\":\"apache01\",\"startTime\":1}");
+        assertEquals(a, b, "仅键序不同的参数规范化后必须一致");
+    }
+
+    /** 参数规范化：嵌套对象也递归排序，数组保持原顺序 */
+    @Test
+    void canonicalArgsSortsNestedAndKeepsArrayOrder() {
+        String a = executor.canonicalArgs("{\"outer\":{\"b\":1,\"a\":2},\"arr\":[{\"x\":1,\"y\":2},3]}");
+        String b = executor.canonicalArgs("{\"arr\":[{\"y\":2,\"x\":1},3],\"outer\":{\"a\":2,\"b\":1}}");
+        assertEquals(a, b);
+        assertTrue(a.contains("\"arr\":[{\"x\":1,\"y\":2},3]"), "数组元素顺序不变");
+    }
+
+    /** 参数规范化：空参/非法 JSON 原样返回 */
+    @Test
+    void canonicalArgsHandlesBlankAndInvalid() {
+        assertEquals("{}", executor.canonicalArgs(null));
+        assertEquals("{}", executor.canonicalArgs("  "));
+        assertEquals("{不是json}", executor.canonicalArgs("{不是json}"));
+    }
 }

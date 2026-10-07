@@ -72,6 +72,20 @@ Vite 已配置代理（见 `frontend/vite.config.ts`）：`/api` → `http://loc
 - **未命中走兜底**：关键词未命中（或命中手册文件读取失败）时回退返回通用兜底手册 `Fallback.md`——先做告警名价值判断（明显测试/无意义名不调数据工具直接出报告），再按「指标 → 日志 → 调用链」固定顺序、告警窗口/基线窗口双窗口策略排查；三类数据双窗口均空则停止调工具直接出报告
 - **新增专用手册**：在 `runbooks/` 下新建 `.md` 并在 `runbook-keywords.json` 加对应关键词即可，无需改代码；建议结构对齐现有手册（原则 / 窗口定义 / 分步判断 / 分析结果）
 
+### groundtruth 告警导入脚本
+
+`scripts/import_groundtruth_alerts.py` 把 groundtruth CSV（AIOps 2021 故障标注）批量导入为告警，逐行调 `POST /api/alerts`，需后端已启动：
+
+```bash
+python scripts/import_groundtruth_alerts.py backend/src/main/resources/mock-data/groundtruth/aiops21_groundtruth_0304.csv
+# 可选 --base-url 指定后端地址（默认 http://localhost:8080）；一次只接收一个 CSV 文件
+```
+
+- **字段映射**：「故障内容」→ `alertName`；`service` 原样；`st_time`/`ed_time` 截到秒后作为告警开始/结束时间（东八区本地时间，不转时区）；`anomaly_type`、故障类别等原始信息存入 `labels`
+- **severity 按 `anomaly_type` 映射**（映射表在脚本头部 `SEVERITY_MAP`）：MEMORY / JVM;MEMORY / NETWORK → critical，CPU / JVM;CPU / DISK → warning；出现新取值会跳过该行并提示补表
+- **三布尔打标**：`isProd=1`、`isEval=1`、`isTest=0`（既是评测集也计入正式口径）
+- **可重复执行**：唯一键 `(service, alertName, starts_at)` 命中已有告警时自动跳过，不会插入重复数据
+
 ### 告警与分析
 
 接口告警（外部系统入口，前端不直接用；`endsAt` 可选，为空表示告警未结束）：

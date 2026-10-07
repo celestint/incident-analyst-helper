@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS alert (
     starts_at VARCHAR(19) NOT NULL,
     ends_at VARCHAR(19) DEFAULT NULL COMMENT '告警结束时间，为空表示未结束',
     labels TEXT,
+    is_prod TINYINT(1) NOT NULL DEFAULT 1 COMMENT '评测打标：正式数据（默认1）',
+    is_eval TINYINT(1) NOT NULL DEFAULT 0 COMMENT '评测打标：属于评测集',
+    is_test TINYINT(1) NOT NULL DEFAULT 0 COMMENT '评测打标：测试数据',
     incident_id BIGINT UNSIGNED DEFAULT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_alert_key (service, alert_name, starts_at)
@@ -20,11 +23,21 @@ CREATE TABLE IF NOT EXISTS analysis_report (
     confidence_reason TEXT COMMENT '置信度理由：LLM 按评分锚点给出的依据说明',
     recommended_actions TEXT COMMENT '推荐SOP，JSON数组字符串 [{"priority":1,"action":"..."}]',
     judgment_logic TEXT COMMENT '判断逻辑：证据融入推理链的叙述文本，1. xxx 分行格式',
+    adopted TINYINT(1) DEFAULT NULL COMMENT '人工采纳标注（评测）：1=赞同 0=不赞同 NULL=未标注',
+    adopt_issues VARCHAR(255) DEFAULT NULL COMMENT '不赞同原因 JSON 数组字符串，取值 noise/evidence/sop，空=未说明原因',
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 既有库升级（MySQL 不支持 ADD COLUMN IF NOT EXISTS，已建过 analysis_report 表时手动执行一次）：
 -- ALTER TABLE analysis_report ADD COLUMN confidence_reason TEXT COMMENT '置信度理由：LLM 按评分锚点给出的依据说明' AFTER confidence;
+-- ALTER TABLE analysis_report ADD COLUMN adopted TINYINT(1) DEFAULT NULL COMMENT '人工采纳标注（评测）：1=赞同 0=不赞同 NULL=未标注' AFTER judgment_logic;
+-- ALTER TABLE analysis_report ADD COLUMN adopt_issues VARCHAR(255) DEFAULT NULL COMMENT '不赞同原因 JSON 数组字符串，取值 noise/evidence/sop，空=未说明原因' AFTER adopted;
+-- 已建过 alert 表时手动执行一次（评测打标三布尔）：
+-- ALTER TABLE alert ADD COLUMN is_prod TINYINT(1) NOT NULL DEFAULT 1 COMMENT '评测打标：正式数据（默认1）' AFTER labels;
+-- ALTER TABLE alert ADD COLUMN is_eval TINYINT(1) NOT NULL DEFAULT 0 COMMENT '评测打标：属于评测集' AFTER is_prod;
+-- ALTER TABLE alert ADD COLUMN is_test TINYINT(1) NOT NULL DEFAULT 0 COMMENT '评测打标：测试数据' AFTER is_eval;
+-- 已建过 incident 表且加过 tag 列的，迁移删除（打标改为 alert 三布尔列，统计按 incident.alert_id 关联）：
+-- ALTER TABLE incident DROP COLUMN tag;
 -- 已建过 alert 表时手动执行一次（T7 告警结束时间）：
 -- ALTER TABLE alert ADD COLUMN ends_at VARCHAR(19) DEFAULT NULL COMMENT '告警结束时间，为空表示未结束' AFTER starts_at;
 

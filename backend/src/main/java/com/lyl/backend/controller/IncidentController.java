@@ -2,6 +2,7 @@ package com.lyl.backend.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lyl.backend.exception.ResourceNotFoundException;
+import com.lyl.backend.exception.ValidationException;
 import com.lyl.backend.mapper.IncidentEventMapper;
 import com.lyl.backend.mapper.IncidentMapper;
 import com.lyl.backend.mapper.ReportMapper;
@@ -22,10 +23,14 @@ import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/incidents")
 public class IncidentController {
+
+    /** 不赞同原因的合法取值（评测标注） */
+    private static final Set<String> ALLOWED_ADOPT_ISSUES = Set.of("noise", "evidence", "sop", "logic", "leak", "redundant");
 
     private final IncidentService incidentService;
     private final AnalysisDispatcher analysisDispatcher;
@@ -137,6 +142,51 @@ public class IncidentController {
     }
 
     /**
+     * 报告采纳标注（评测口径见 docs/plan/EVALUATION_PLAN.md）：
+     * adopted=true 赞同；false 不赞同，可附原因 issues（noise/evidence/sop，可空数组=未说明原因）
+     */
+    @PostMapping("/{id}/report/adoption")
+    public ApiResponse<Map<String, Object>> submitAdoption(@PathVariable Long id,
+                                                           @RequestBody Map<String, Object> body) {
+        Incident incident = incidentMapper.selectById(id);
+        if (incident == null) {
+            throw new ResourceNotFoundException("分析事件不存在");
+        }
+        if (incident.getReportId() == null) {
+            throw new ValidationException("该分析尚无报告，无法标注");
+        }
+        if (!(body.get("adopted") instanceof Boolean adopted)) {
+            throw new ValidationException("adopted 必须为布尔值");
+        }
+        List<String> issues = List.of();
+        if (!adopted && body.get("issues") != null) {
+            if (!(body.get("issues") instanceof List<?> raw)) {
+                throw new ValidationException("issues 必须为字符串数组");
+            }
+            issues = raw.stream().map(String::valueOf).toList();
+            for (String issue : issues) {
+                if (!ALLOWED_ADOPT_ISSUES.contains(issue)) {
+                    throw new ValidationException("未知的原因类型: " + issue);
+                }
+            }
+        }
+        // 赞同（或未说明原因）时 issues 存 null，不存空数组
+        String issuesJson;
+        try {
+            issuesJson = issues.isEmpty() ? null : objectMapper.writeValueAsString(issues);
+        } catch (Exception e) {
+            throw new IllegalStateException("issues 序列化失败", e);
+        }
+        reportMapper.updateAdoption(incident.getReportId(), adopted, issuesJson);
+        return ApiResponse.ok(Map.of(
+                "incidentId", id,
+                "reportId", incident.getReportId(),
+                "adopted", adopted,
+                "adoptIssues", issues
+        ));
+    }
+
+    /**
      * SSE 事件流：先注册再重放 seq > since 的落库事件（前端按 sequence 去重），
      * 之后转为实时推送。断点取 ?since= 或 Last-Event-ID 请求头。
      */
@@ -181,6 +231,9 @@ public class IncidentController {
         data.put("recommendedActions", RecommendedActionsNormalizer.normalize(
                 parsedActions instanceof List<?> list ? list : List.of()));
         data.put("judgmentLogic", report.getJudgmentLogic());
+        data.put("adopted", report.getAdopted());
+        Object parsedIssues = parseJsonArray(report.getAdoptIssues());
+        data.put("adoptIssues", parsedIssues instanceof List<?> list ? list : List.of());
         return data;
     }
 

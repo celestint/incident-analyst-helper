@@ -4,6 +4,7 @@ import com.lyl.backend.model.IncidentEvent;
 import org.apache.ibatis.annotations.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 过程事件表（incident_events）数据访问，只追加不修改
@@ -31,6 +32,20 @@ public interface IncidentEventMapper {
      */
     @Delete("DELETE FROM incident_events WHERE incident_id = #{incidentId}")
     int deleteByIncidentId(Long incidentId);
+
+    /**
+     * 思考循环失控信号：同一 incident 内完全相同的 agent_thought payload 出现 ≥2 次的 incident 集合。
+     * 重复的工具调用被内存去重拦下不落库，重复思考会落库，是可观测的循环痕迹
+     */
+    @Select("SELECT DISTINCT incident_id AS incidentId FROM incident_events " +
+            "WHERE event_type = 'agent_thought' GROUP BY incident_id, payload HAVING COUNT(*) >= 2")
+    List<Long> selectThoughtLoopIncidentIds();
+
+    /**
+     * 全部工具结果事件（评测指标：工具成功率，success 字段在 Java 侧解析）
+     */
+    @Select("SELECT incident_id AS incidentId, payload FROM incident_events WHERE event_type = 'tool_call_result'")
+    List<Map<String, Object>> selectToolResultRows();
 
     /**
      * 清空表（仅测试用）

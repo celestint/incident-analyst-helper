@@ -3,6 +3,8 @@ package com.lyl.backend.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lyl.backend.config.AnalysisProperties;
 import com.lyl.backend.mapper.IncidentEventMapper;
@@ -73,6 +75,17 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
      */
     private static final String STOP_LOSS_HINT =
             "\n\n[系统提示] 可观测数据持续为空，禁止再调用工具，直接输出最终 JSON 报告。";
+
+    /**
+     * 首次全空结果时附加在工具结果后的一次性提示（写在工具结果消息内，理由同 DUPLICATE_CALL_HINT）：
+     * 纠偏"单窗口查空即判定数据缺失"（incident 25 查到 0 条慢调用却输出"调用链数据缺失"）。
+     * 查空后的后续动作是否补查基线由手册决定，这里只纠表述与概念。与止损提示独立：止损拦"调不停"，本提示纠"判得早"。
+     */
+    private static final String EMPTY_RESULT_HINT =
+            "\n\n[系统提示] 本次查询成功但结果为空（total=0），只说明该查询窗口内没有记录，不等于\"数据缺失\"。"
+                    + "查空后的后续动作（是否补查基线窗口等）按手册对该类数据空结果的处理规则执行；"
+                    + "结论表述上，单窗口查空只能写\"未发现 XX\"（如\"故障发生时间窗口未发现慢调用\"），"
+                    + "\"XX数据缺失\"仅当手册判定双窗口均无数据时才可使用。";
 
     private final LlmChatClient llmChatClient;
     private final AnalysisToolRegistry registry;
@@ -505,7 +518,7 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
 
     /**
      * 组装回填给模型的工具结果文本：失败带错误前缀；成功且结果全空时累计计数，
-     * 累计达到止损阈值后一次性附加止损提示（此后不再附加），拦截失控扩窗循环
+     * 首次全空附加一次空结果纠偏提示；累计达到止损阈值后再一次性附加止损提示，拦截失控扩窗循环
      */
     String buildToolResultContent(boolean success, String resultText, String error, StopLossState stopLoss) {
         String content = success ? resultText : "工具执行失败: " + error;
@@ -514,11 +527,16 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
         }
         if (isEmptyResult(resultText)) {
             stopLoss.emptyCount++;
+            if (!stopLoss.emptyHintInjected) {
+                stopLoss.emptyHintInjected = true;
+                log.debug("Empty-result hint injected on first empty tool call");
+                content += EMPTY_RESULT_HINT;
+            }
         }
         if (stopLoss.emptyCount >= EMPTY_RESULT_STOP_LOSS && !stopLoss.injected) {
             stopLoss.injected = true;
             log.info("Empty-result stop loss triggered after {} empty tool calls", stopLoss.emptyCount);
-            return content + STOP_LOSS_HINT;
+            content += STOP_LOSS_HINT;
         }
         return content;
     }
@@ -551,6 +569,8 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
         int emptyCount = 0;
         /** 止损提示是否已注入（只注入一次） */
         boolean injected = false;
+        /** 空结果纠偏提示是否已注入（首次全空时注入一次） */
+        boolean emptyHintInjected = false;
     }
 
     /**
@@ -632,38 +652,50 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
     }
 
     /**
-     * 根据告警开始时间构建默认查询窗口（前 10 分钟 ~ 后 5 分钟）
+     * 根据告警开始时间构建默认查询窗口（前 10 分钟 ~ 后 5 分钟）。
+     * 模型应优先使用 alertInfoText 给出的预计算窗口，此默认值仅在模型未传时间参数时兜底。
      */
     private ToolContext buildContext(Alert alert) {
-        long start;
-        try {
-            start = LocalDateTime.parse(alert.getStartsAt(), FMT)
-                    .atZone(ZoneId.systemDefault()).toEpochSecond();
-        } catch (Exception e) {
-            log.warn("Invalid startsAt {}, using now as window anchor", alert.getStartsAt());
-            start = Instant.now().getEpochSecond();
-        }
+        long start = parseEpochOrNow(alert.getStartsAt());
         return new ToolContext(alert.getService(), start - 600, start + 300);
     }
 
     /**
-     * 首条用户消息：告警信息。附上开始时间的 Unix 秒值——模型自行换算时间戳经常出错，
-     * 导致查询窗口整体偏移而查不到任何数据
+     * 首条用户消息：告警信息。附开始时间的 Unix 秒值与预计算查询窗口——
+     * 模型自行换算时间戳经常出错（incident 14 把 12:30 告警的窗口算成 11:30–12:30），
+     * 由后端算好故障发生时间窗口与基线窗口，模型照抄。
      */
     private String alertInfoText(Alert alert) {
-        long startsAtEpoch;
-        try {
-            startsAtEpoch = LocalDateTime.parse(alert.getStartsAt(), FMT)
-                    .atZone(ZoneId.systemDefault()).toEpochSecond();
-        } catch (Exception e) {
-            startsAtEpoch = 0;
+        long start = parseEpochOrNow(alert.getStartsAt());
+        long windowEnd = parseEpochOrNow(alert.getEndsAt());
+        if (windowEnd <= start) {
+            // 未结束（endsAt 为空）→ 至分析发起时刻
+            windowEnd = Instant.now().getEpochSecond();
+        }
+        if (windowEnd - start < 300) {
+            // 窗口过短或起止倒挂（如告警时间在未来/刚触发）→ 至少给 5 分钟窗口
+            windowEnd = start + 300;
         }
         return "告警信息：\n"
                 + "告警名：" + alert.getAlertName() + "\n"
                 + "服务：" + alert.getService() + "\n"
                 + "严重级别：" + alert.getSeverity() + "\n"
-                + "开始时间：" + alert.getStartsAt() + "（Unix 秒：" + startsAtEpoch + "）\n"
-                + "标签：" + (alert.getLabels() == null ? "{}" : alert.getLabels());
+                + "开始时间：" + alert.getStartsAt() + "（Unix 秒：" + start + "）\n"
+                + "标签：" + (alert.getLabels() == null ? "{}" : alert.getLabels()) + "\n"
+                + "查询窗口（直接引用，禁止自行换算）：\n"
+                + "故障发生时间窗口：Unix 秒 " + start + " ~ " + windowEnd + "\n"
+                + "基线窗口（故障发生前 30 分钟）：Unix 秒 " + (start - 1800) + " ~ " + start;
+    }
+
+    /**
+     * yyyy-MM-dd HH:mm:ss → Unix 秒；空/解析失败返回 0
+     */
+    private long parseEpochOrNow(String dateTime) {
+        try {
+            return LocalDateTime.parse(dateTime, FMT).atZone(ZoneId.systemDefault()).toEpochSecond();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /**
@@ -671,9 +703,9 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
      */
     private static String evidenceSource(String toolName) {
         return switch (toolName) {
-            case "getMetrics", "getKpi" -> "metrics";
+            case "getMetrics", "getKpi", "getMemoryUsage" -> "metrics";
             case "getLogs", "countLogs" -> "logs";
-            case "getSlowSpans" -> "trace";
+            case "getSlowSpans", "getTraceCount" -> "trace";
             case "getRunbook" -> "runbook";
             default -> null;
         };
@@ -687,17 +719,40 @@ public class LlmAnalysisExecutor implements AnalysisExecutor {
     }
 
     /**
-     * 参数 JSON 规范化（解析后重序列化），消除模型输出间的空白/字段顺序差异；解析失败原样返回
+     * 参数 JSON 规范化：解析后递归按字段名排序再序列化，
+     * 消除模型输出间的空白/字段顺序差异（键序不同内容相同的调用必须判重命中）；解析失败原样返回
      */
-    private String canonicalArgs(String argsJson) {
+    String canonicalArgs(String argsJson) {
         if (argsJson == null || argsJson.isBlank()) {
             return "{}";
         }
         try {
-            return objectMapper.readTree(argsJson).toString();
+            return sortKeys(objectMapper.readTree(argsJson)).toString();
         } catch (Exception e) {
             return argsJson;
         }
+    }
+
+    /**
+     * 递归按字段名排序 ObjectNode（数组保持原顺序）
+     */
+    private static JsonNode sortKeys(JsonNode node) {
+        if (node instanceof ObjectNode obj) {
+            List<String> names = new ArrayList<>();
+            obj.fieldNames().forEachRemaining(names::add);
+            java.util.Collections.sort(names);
+            ObjectNode sorted = JsonNodeFactory.instance.objectNode();
+            for (String name : names) {
+                sorted.set(name, sortKeys(obj.get(name)));
+            }
+            return sorted;
+        }
+        if (node instanceof ArrayNode arr) {
+            ArrayNode out = JsonNodeFactory.instance.arrayNode();
+            arr.forEach(item -> out.add(sortKeys(item)));
+            return out;
+        }
+        return node;
     }
 
     private static String sha256(String text) {

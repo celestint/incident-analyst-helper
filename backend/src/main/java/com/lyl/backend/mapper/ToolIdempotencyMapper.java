@@ -4,6 +4,7 @@ import com.lyl.backend.model.ToolIdempotency;
 import org.apache.ibatis.annotations.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工具幂等表（tool_idempotency）数据访问，工具执行后新增、不更新
@@ -37,6 +38,12 @@ public interface ToolIdempotencyMapper {
      */
     @Delete("DELETE FROM tool_idempotency WHERE incident_id = #{incidentId}")
     int deleteByIncidentId(Long incidentId);
+
+    /**
+     * 按 incident 统计工具执行次数（评测指标：工具调用次数分布；幂等表即执行记录，天然去重）
+     */
+    @Select("SELECT incident_id AS incidentId, COUNT(*) AS cnt FROM tool_idempotency GROUP BY incident_id")
+    List<Map<String, Object>> countByIncident();
 
     /**
      * 清空表（仅测试用）

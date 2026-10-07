@@ -1,5 +1,5 @@
 import request from './index'
-import type { ApiResponse, Incident, AnalysisReport, HistoryEvent } from '@/types'
+import type { ApiResponse, Incident, AnalysisReport, HistoryEvent, AdoptIssue } from '@/types'
 
 export const incidentApi = {
   // 触发分析（传告警 ID；FAILED 状态下再次调用即"重新分析"，从头再来）
@@ -22,10 +22,19 @@ export const incidentApi = {
     return request.get(`/incidents/${id}/events`)
   },
 
+  // 报告采纳标注（评测）：赞同传 issues=[]；不赞同可附原因，可跳过（空数组=未说明原因）
+  submitAdoption(
+    id: number,
+    adopted: boolean,
+    issues: AdoptIssue[]
+  ): Promise<ApiResponse<{ incidentId: number; reportId: number; adopted: boolean; adoptIssues: AdoptIssue[] }>> {
+    return request.post(`/incidents/${id}/report/adoption`, { adopted, issues })
+  },
+
   // SSE 实时推送。since 为已收到的最大事件序号，后端先重放之后的事件再转实时
   streamIncident(id: number, since = 0): EventSource {
     return new EventSource(`/api/incidents/${id}/stream?since=${since}`)
   },
 }
 
-export type { Incident, AnalysisReport }
+export type { Incident, AnalysisReport, AdoptIssue }

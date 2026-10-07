@@ -6,13 +6,10 @@
 - 基线：告警窗口前紧邻 30 分钟。
 
 ## 1. 查内存指标
-调用 `getMetrics`，body 关键字段 `metric=memory`；其他参数按工具 schema 补全。
+调用 `getMemoryUsage`，按时间点返回内存占比（`noCacheMemPerc`/`memUsedMemPerc`，后端已按公式算好并转为百分比；优先取原始占比指标，缺失时自动用 UserMem/CacheMem/MEMFreeMem 计算，数据不全的时间点已跳过）。直接基于返回值判断，禁止心算，也不需再调 `calculate`。
 
 1. 返回非空则：  
-1.1 取内存时序，按时间排序。
-- 优先取 NoCacheMemPerc；无则算：`(UserMem - CacheMem) / (UserMem + MEMFreeMem) * 100`。
-- MEMUsedMemPerc 仅参考；无则算：`UserMem / (UserMem + MEMFreeMem) * 100`。
-- 如果点数据不全 → 忽略该点，用有效点判断。  
+1.1 取 noCacheMemPerc 时序（按时间升序），基于多有效点判断；memUsedMemPerc 作参考，辅助解释告警触发原因。
 1.2 输出判断（需基于多有效点，不能单点代“持续”）：  
 1.2.1根据数据得出故障证据：
 - NoCacheMemPerc 是否曾持续 >80% / >90%？持续多久？峰值？-> 如果持续，则说明内存资源饱和
@@ -42,19 +39,17 @@
 - 数据缺失：[日志] 日志数据缺失，不下结论
 
 ## 3. 查调用链
-调用 `getTrace`，无参数；其他按 schema。
+先调 `getSlowSpans`（service/startTime/endTime/limit）查最慢调用；判定"调用链缺失"用 `getTraceCount`（service/startTime/endTime）。
 
 根据判断流程，输出判断：
-1. 窗口内无 trace → 记“调用链缺失”。
-2. 窗口内有 trace：  
-2.1. 有基线（故障前紧邻 30 分钟）：
-   - 基线 >0，窗口 =0 → 疑似断档 / 服务卡死。
-   - 基线 >0，窗口 >0 → 查 error span、超时 span、RT 是否 > 基线、trace 是否残缺；有则异常，无则“调用链无异常”。 
-2.2. 无基线：只做窗口内自检同上。无异常写“无基线可对比，窗口内未发现异常”，记“基线缺失”，不下“无影响”。
+1. 告警窗口查到 span：查 error span、超时 span、RT 是否 > 基线；有则异常，无则"调用链无异常"。
+2. 告警窗口查空：结论只能是"故障发生时间窗口未发现慢调用"，禁止写"调用链缺失"——未查到慢调用不代表没有 trace 数据；需判断是否断档时，用 `getTraceCount` 对比双窗口 span 总数。
+3. `getTraceCount` 双窗口 span 总数均为 0 → 记"调用链缺失"，不下结论。
 
 输出判断示例：
 - 有异常：[调用链] 窗口有 trace，RT 120ms > 基线 80ms。
-- 数据缺失：[调用链] 调用链数据缺失，不下结论
+- 未发现：[调用链] 故障发生时间窗口未发现慢调用。
+- 数据缺失：[调用链] 双窗口调用链数据缺失（span 总数为 0），不下结论
 
 ## 4. 分析结果
 1. 基于指标和日志判断，确认产生原因

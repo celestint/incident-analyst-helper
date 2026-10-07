@@ -2,12 +2,12 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { Warning } from '@element-plus/icons-vue'
 import { incidentApi } from '@/api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import ProcessTimeline from '@/components/ProcessTimeline.vue'
 import { useScrollFlash } from '@/composables/useScrollFlash'
 import { severityLabel, severityTagType, statusLabel, statusTagType } from '@/utils/labels'
 import { formatJudgmentLogic } from '@/utils/format'
-import type { Alert, Incident, SseEvent, AnalysisReport } from '@/types'
+import type { Alert, Incident, SseEvent, AnalysisReport, AdoptIssue } from '@/types'
 
 /**
  * 右栏分析面板：吸顶状态行（级别+服务+告警名+状态）+ 分析过程 + 分析报告。
@@ -48,7 +48,9 @@ const incidentInfo = ref<Incident | null>(null)
 const reportInfo = ref<AnalysisReport | null>(null)
 /** 已落库事件（RUNNING 来自 SSE，结束态来自历史接口） */
 const events = ref<SseEvent[]>([])
-/** text_delta 流式缓冲区（不落库；每收到落库事件即清空，只保留当前流式轮次，```json 界前为思考、界后为报告块） */
+/** text_delta 流式缓冲区（不落库；每收到落库事件即清空，只保留当前流式轮次）。
+ *  ```json 界前为思考流式（在时间线「思考」行显示）；界后是报告 JSON，属机器数据不展示，
+ *  report_finalized 后由下方结构化报告呈现 */
 const streamingText = ref('')
 const reconnecting = ref(false)
 const loading = ref(false)
@@ -124,7 +126,7 @@ const initSse = () => {
     // 落库即一轮流式结束：清空缓冲，只保留当前正在流式的轮次，避免与已显示步骤重复
     streamingText.value = ''
 
-    // 报告定稿：用完整报告替换流式半截文本，重载详情
+    // 报告定稿：清空流式缓冲，重载详情进入结构化报告展示
     if (data.type === 'report_finalized') {
       streamingText.value = ''
       closeSse()
@@ -191,15 +193,11 @@ const sopActions = computed(() =>
 /** 报告块起始标记：prompt 约定最终报告以 ```json 代码块结尾 */
 const JSON_FENCE = '```json'
 
-/** 流式缓冲拆分：```json 界前为当前轮思考叙述（在「思考」步骤局部显示），界后为报告块（底部框显示） */
+/** 流式缓冲拆分：只取 ```json 界前部分作为当前轮思考叙述（在「思考」步骤局部显示）；
+ *  界后的报告 JSON 不展示，report_finalized 落库后由结构化报告呈现 */
 const streamingThought = computed(() => {
   const idx = streamingText.value.indexOf(JSON_FENCE)
   return (idx >= 0 ? streamingText.value.slice(0, idx) : streamingText.value).trim()
-})
-
-const streamingReport = computed(() => {
-  const idx = streamingText.value.indexOf(JSON_FENCE)
-  return idx >= 0 ? streamingText.value.slice(idx) : ''
 })
 
 const handleResume = async () => {  if (!incidentInfo.value) return
@@ -213,6 +211,85 @@ const handleResume = async () => {  if (!incidentInfo.value) return
     ElMessage.error(err.message || '续跑失败')
   } finally {
     loading.value = false
+  }
+}
+
+// ---- 重新分析（start 接口，从头再来全新 LLM 上下文；区别于 FAILED 的重试 = resume 断点续跑）----
+
+const reanalyzing = ref(false)
+
+/** 重置本地状态后重新加载：start 已把 incident 置回 RUNNING，loadIncident 会重开 SSE 接收新一轮事件 */
+const handleReanalyze = async () => {
+  if (reanalyzing.value) return
+  const alertId = incidentInfo.value?.alertId ?? props.alert?.id
+  if (!alertId) return
+  try {
+    await ElMessageBox.confirm('将从头重新分析该告警，当前报告会被新一轮分析结果替换。', '重新分析', {
+      confirmButtonText: '重新分析',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  reanalyzing.value = true
+  try {
+    await incidentApi.startAnalysis(alertId)
+    ElMessage.success('重新分析已启动')
+    closeSse()
+    if (reconnectTimer) window.clearTimeout(reconnectTimer)
+    events.value = []
+    streamingText.value = ''
+    lastSeq = 0
+    followBottom.value = true
+    await loadIncident()
+    emit('finished')
+  } catch (err: any) {
+    ElMessage.error(err.message || '重新分析失败')
+  } finally {
+    reanalyzing.value = false
+  }
+}
+
+// ---- 报告采纳标注（评测，口径见 docs/plan/EVALUATION_PLAN.md）----
+
+/** 不赞同原因子维度文案（短名，与 EVALUATION_PLAN.md 标注口径表一致） */
+const ISSUE_LABELS: Record<AdoptIssue, string> = {
+  noise: '噪音判断',
+  evidence: '证据支撑',
+  logic: '判断逻辑',
+  leak: '内部逻辑泄露',
+  sop: 'SOP 可执行',
+  redundant: '信息冗余',
+}
+
+const submittingAdoption = ref(false)
+const issueDialogVisible = ref(false)
+const selectedIssues = ref<AdoptIssue[]>([])
+
+const issueText = (issues: AdoptIssue[]) =>
+  issues.map(issue => ISSUE_LABELS[issue]).join('、')
+
+/** 点赞同直接提交；点不赞同弹原因勾选（可全不选提交=未说明原因） */
+const openDislikeDialog = () => {
+  selectedIssues.value = [...(reportInfo.value?.adoptIssues ?? [])]
+  issueDialogVisible.value = true
+}
+
+const submitAdoption = async (adopted: boolean, issues: AdoptIssue[]) => {
+  if (!incidentInfo.value || submittingAdoption.value) return
+  submittingAdoption.value = true
+  try {
+    await incidentApi.submitAdoption(incidentInfo.value.id, adopted, issues)
+    if (reportInfo.value) {
+      reportInfo.value = { ...reportInfo.value, adopted, adoptIssues: issues }
+    }
+    issueDialogVisible.value = false
+    ElMessage.success(adopted ? '已记录：赞同' : '已记录：不赞同')
+  } catch (err: any) {
+    ElMessage.error(err.message || '提交失败')
+  } finally {
+    submittingAdoption.value = false
   }
 }
 </script>
@@ -270,10 +347,7 @@ const handleResume = async () => {  if (!incidentInfo.value) return
               :live="incidentInfo?.status === 'RUNNING'"
               :streaming-thought="streamingThought"
             />
-            <!-- 流式输出区：仅报告块（```json 起）在此流式，report_finalized 到达后被完整报告替换 -->
-            <div v-if="incidentInfo?.status === 'RUNNING' && streamingReport" class="streaming-box">
-              <p class="streaming-text">{{ streamingReport }}<span class="cursor">▍</span></p>
-            </div>
+            <!-- 流式中的报告 JSON（```json 起）不展示：机器数据，report_finalized 后由结构化报告呈现 -->
           </el-collapse-item>
         </el-collapse>
       </div>
@@ -310,8 +384,81 @@ const handleResume = async () => {  if (!incidentInfo.value) return
         </ul>
         <p><strong>判断逻辑：</strong></p>
         <p class="judgment-text">{{ formatJudgmentLogic(reportInfo.judgmentLogic) }}</p>
+        <!-- 评测标注：AI 提示 + 赞同/不赞同（口径见 docs/plan/EVALUATION_PLAN.md） -->
+        <p class="ai-disclaimer">AI生成，仅供参考</p>
+        <div class="adoption-row">
+          <el-tooltip content="重新分析" placement="top">
+            <button
+              class="thumb-btn"
+              :disabled="reanalyzing"
+              aria-label="重新分析"
+              @click="handleReanalyze"
+            >
+              <svg
+                class="thumb-icon"
+                :class="{ spinning: reanalyzing }"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
+          </el-tooltip>
+          <el-tooltip content="赞同" placement="top">
+            <button
+              class="thumb-btn"
+              :class="{ 'is-yes': reportInfo.adopted === true }"
+              :disabled="submittingAdoption"
+              aria-label="赞同"
+              @click="submitAdoption(true, [])"
+            >
+              <svg class="thumb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 10v12" />
+                <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+              </svg>
+            </button>
+          </el-tooltip>
+          <el-tooltip content="不赞同" placement="top">
+            <button
+              class="thumb-btn"
+              :class="{ 'is-no': reportInfo.adopted === false }"
+              :disabled="submittingAdoption"
+              aria-label="不赞同"
+              @click="openDislikeDialog"
+            >
+              <svg class="thumb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 14V2" />
+                <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
+              </svg>
+            </button>
+          </el-tooltip>
+          <span v-if="reportInfo.adopted === false && (reportInfo.adoptIssues?.length ?? 0) > 0" class="adopt-issues">
+            原因：{{ issueText(reportInfo.adoptIssues ?? []) }}
+          </span>
+          <span v-else-if="reportInfo.adopted != null" class="adopt-issues">已标注</span>
+        </div>
       </div>
     </template>
+
+    <!-- 不赞同原因勾选：可多选、可全不选提交（=未说明原因跳过） -->
+    <el-dialog v-model="issueDialogVisible" title="不赞同的原因（可多选，可跳过）" width="360px">
+      <!-- 每项单独一行；顺序与 EVALUATION_PLAN.md 标注口径表一致 -->
+      <el-checkbox-group v-model="selectedIssues" class="issue-checkbox-group">
+        <el-checkbox value="noise">噪音判断不合理</el-checkbox>
+        <el-checkbox value="evidence">证据支撑不足或不真实</el-checkbox>
+        <el-checkbox value="sop">推荐 SOP 不合理或不可执行</el-checkbox>
+        <el-checkbox value="logic">判断逻辑不合理</el-checkbox>
+        <el-checkbox value="leak">泄露内部执行逻辑</el-checkbox>
+        <el-checkbox value="redundant">信息冗余或展示不合理</el-checkbox>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button @click="issueDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submittingAdoption" @click="submitAdoption(false, selectedIssues)">
+          提交
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -486,28 +633,93 @@ const handleResume = async () => {  if (!incidentInfo.value) return
   white-space: pre-wrap;
 }
 
-.streaming-box {
-  margin-top: 16px;
-  padding: 12px;
-  background: var(--el-bg-color);
-  border-radius: 6px;
+/* AI 生成提示：灰色小字，位于判断逻辑之后、采纳标注之前 */
+.ai-disclaimer {
+  margin: 12px 0 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
-.streaming-text {
-  white-space: pre-wrap;
-  margin: 0;
-  line-height: 1.6;
+/* 采纳标注行：赞/踩按钮 + 已标注原因说明 */
+.adoption-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
 }
 
-.cursor {
-  animation: blink 1s infinite;
+.adopt-issues {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 赞同/不赞同：裸图标按钮（无边框无底色），EP 无拇指图标，内联 SVG */
+.thumb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.thumb-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-bg-page);
+}
+
+/* 已标注状态：赞同=苔绿、不赞同=红 */
+.thumb-btn.is-yes {
   color: var(--color-primary);
 }
 
-@keyframes blink {
-  50% {
-    opacity: 0;
+/* 不赞同原因弹窗：每项单独一行（纵向排列） */
+:deep(.issue-checkbox-group) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+:deep(.issue-checkbox-group .el-checkbox) {
+  margin-right: 0;
+  height: auto;
+}
+
+.thumb-btn.is-no {
+  color: var(--color-danger);
+}
+
+.thumb-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 重新分析进行中：图标旋转 */
+.thumb-icon.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
+}
+
+.thumb-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.thumb-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 ul {

@@ -23,4 +23,8 @@ public class AnalysisReport {
     private String recommendedActions;
     /** 判断逻辑：证据融入推理链的叙述文本（证据注明来源/数值/时间点，不单列证据表） */
     private String judgmentLogic;
+    /** 人工采纳标注（评测）：true=赞同 false=不赞同 null=未标注（TINYINT(1)，驱动自动映射 Boolean） */
+    private Boolean adopted;
+    /** 不赞同原因 JSON 数组字符串，取值 noise/evidence/sop，空=未说明原因 */
+    private String adoptIssues;
 }

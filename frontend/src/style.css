@@ -41,6 +41,12 @@
   --color-info-light-8: oklch(91.5% 0.008 110);
   --color-info-light-9: oklch(95.5% 0.008 110);
 
+  /* 用户视角（仿 IM 群消息流）专用：聊天链接蓝与高饱和语义文字色（不接管 Element Plus） */
+  --color-link: #576b95;
+  --color-danger-strong: oklch(52% 0.23 27);
+  --color-warning-strong: oklch(55% 0.19 55);
+  --color-success-strong: oklch(40% 0.13 150);
+
   /* 灰阶 / 文字 / 边框（暖调中性） */
   --color-text-primary: oklch(28% 0.02 140);
   --color-text-regular: oklch(42% 0.02 140);

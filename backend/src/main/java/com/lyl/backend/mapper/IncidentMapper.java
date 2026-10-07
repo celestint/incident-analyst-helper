@@ -56,6 +56,12 @@ public interface IncidentMapper {
     List<Incident> selectAll();
 
     /**
+     * 删除单条分析事件（告警级联删除用，须连同事件/幂等/报告一起清理）
+     */
+    @Delete("DELETE FROM incident WHERE id = #{id}")
+    int deleteById(Long id);
+
+    /**
      * 清空表（仅测试用）
      */
     @Delete("DELETE FROM incident")

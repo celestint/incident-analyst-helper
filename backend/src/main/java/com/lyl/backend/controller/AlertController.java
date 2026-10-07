@@ -7,6 +7,7 @@ import com.lyl.backend.mapper.IncidentMapper;
 import com.lyl.backend.model.Alert;
 import com.lyl.backend.model.ApiResponse;
 import com.lyl.backend.model.Incident;
+import com.lyl.backend.service.AlertService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -19,10 +20,12 @@ public class AlertController {
 
     private final AlertMapper alertMapper;
     private final IncidentMapper incidentMapper;
+    private final AlertService alertService;
 
-    public AlertController(AlertMapper alertMapper, IncidentMapper incidentMapper) {
+    public AlertController(AlertMapper alertMapper, IncidentMapper incidentMapper, AlertService alertService) {
         this.alertMapper = alertMapper;
         this.incidentMapper = incidentMapper;
+        this.alertService = alertService;
     }
 
     @PostMapping
@@ -63,6 +66,12 @@ public class AlertController {
             alert.setLabels(labelsObj != null ? labelsObj.toString() : null);
         }
 
+        // 评测打标（可选项）：agent/ai 造的测试告警创建时带 isTest=true，生来不进正式口径。
+        // 缺省：isTest/isEval=false；isProd 显式传入生效，否则默认非测试即正式
+        alert.setIsTest(Boolean.TRUE.equals(request.get("isTest")));
+        alert.setIsEval(Boolean.TRUE.equals(request.get("isEval")));
+        alert.setIsProd(request.get("isProd") instanceof Boolean b ? b : !alert.getIsTest());
+
         // 同一告警（服务+告警名+开始时间相同）再次 POST：携带 endsAt 时回填结束时间，否则按重复拒绝
         Alert existing = alertMapper.selectByUniqueKey(service, alertName, startsAtStr);
         if (existing != null) {
@@ -91,6 +100,46 @@ public class AlertController {
         return ApiResponse.ok(data);
     }
 
+    /**
+     * 批量打标（评测口径见 docs/plan/EVALUATION_PLAN.md）：提交三布尔完整状态，
+     * 三个独立可组合（无互斥），正式=isProd=true。body: {ids:[], isProd, isEval, isTest}
+     */
+    @PostMapping("/mark")
+    public ApiResponse<Map<String, Object>> mark(@RequestBody Map<String, Object> request) {
+        List<Long> ids = extractIds(request.get("ids"));
+        Boolean isProd = (request.get("isProd") instanceof Boolean b) ? b : null;
+        Boolean isEval = (request.get("isEval") instanceof Boolean b) ? b : null;
+        Boolean isTest = (request.get("isTest") instanceof Boolean b) ? b : null;
+        int updated = alertService.mark(ids, isProd, isEval, isTest);
+        return ApiResponse.ok(Map.of("updated", updated, "isProd", isProd, "isEval", isEval, "isTest", isTest));
+    }
+
+    /**
+     * 批量删除告警：级联删除关联 incident / 事件流 / 幂等记录 / 报告。body: {ids:[]}
+     */
+    @PostMapping("/delete")
+    public ApiResponse<Map<String, Object>> deleteAlerts(@RequestBody Map<String, Object> request) {
+        List<Long> ids = extractIds(request.get("ids"));
+        int deleted = alertService.delete(ids);
+        return ApiResponse.ok(Map.of("deleted", deleted));
+    }
+
+    private List<Long> extractIds(Object raw) {
+        if (!(raw instanceof List<?> list)) {
+            throw new ValidationException("ids 必须为数字数组");
+        }
+        return list.stream().map(item -> {
+            if (item instanceof Number n) {
+                return n.longValue();
+            }
+            try {
+                return Long.parseLong(item.toString());
+            } catch (NumberFormatException e) {
+                throw new ValidationException("非法告警 id: " + item);
+            }
+        }).toList();
+    }
+
     /** 告警响应体公共字段（不含 status，由调用方按 incident 状态回填） */
     private Map<String, Object> alertData(Alert alert, Object rawLabels) {
         Map<String, Object> data = new HashMap<>();
@@ -102,6 +151,9 @@ public class AlertController {
         data.put("endsAt", alert.getEndsAt());
         data.put("labels", rawLabels != null ? rawLabels : alert.getLabels());
         data.put("incidentId", null);
+        data.put("isProd", alert.getIsProd());
+        data.put("isEval", alert.getIsEval());
+        data.put("isTest", alert.getIsTest());
         return data;
     }
 

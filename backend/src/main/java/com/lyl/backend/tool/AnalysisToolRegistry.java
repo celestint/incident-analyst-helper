@@ -21,13 +21,16 @@ public class AnalysisToolRegistry {
 
     private final DataAnalyticsService dataAnalyticsService;
     private final RunbookService runbookService;
+    private final ExpressionEvaluator expressionEvaluator;
     private final ObjectMapper objectMapper;
 
     public AnalysisToolRegistry(DataAnalyticsService dataAnalyticsService,
                                 RunbookService runbookService,
+                                ExpressionEvaluator expressionEvaluator,
                                 ObjectMapper objectMapper) {
         this.dataAnalyticsService = dataAnalyticsService;
         this.runbookService = runbookService;
+        this.expressionEvaluator = expressionEvaluator;
         this.objectMapper = objectMapper;
     }
 
@@ -88,12 +91,39 @@ public class AnalysisToolRegistry {
                         .build(),
                 ToolSpecification.builder()
                         .name("getSlowSpans")
-                        .description("查询慢调用 span（按耗时降序），用于链路定位上游/下游瓶颈")
+                        .description("查询慢调用 span（按耗时降序），用于链路定位上游/下游瓶颈。查空只代表未发现慢调用，不代表调用链数据缺失；判定调用链数据缺失用 getTraceCount")
                         .parameters(JsonObjectSchema.builder()
                                 .addStringProperty("service", "服务名，缺省为告警服务")
                                 .addIntegerProperty("startTime", "开始时间（Unix 秒）")
                                 .addIntegerProperty("endTime", "结束时间（Unix 秒）")
                                 .addIntegerProperty("limit", "返回条数上限，默认10")
+                                .build())
+                        .build(),
+                ToolSpecification.builder()
+                        .name("getTraceCount")
+                        .description("统计窗口内调用 span 总数，返回数字。判定\"调用链数据缺失\"必须用它：双窗口 span 总数均为 0 才可认定调用链缺失")
+                        .parameters(JsonObjectSchema.builder()
+                                .addStringProperty("service", "服务名，缺省为告警服务")
+                                .addIntegerProperty("startTime", "开始时间（Unix 秒）")
+                                .addIntegerProperty("endTime", "结束时间（Unix 秒）")
+                                .build())
+                        .build(),
+                ToolSpecification.builder()
+                        .name("getMemoryUsage")
+                        .description("内存类告警专用：按时间点返回内存占比 {time, noCacheMemPerc, memUsedMemPerc}（百分比，后端已按公式算好，按时间升序）。查内存占比直接用它，无需 getMetrics + calculate")
+                        .parameters(JsonObjectSchema.builder()
+                                .addStringProperty("service", "服务名，缺省为告警服务")
+                                .addIntegerProperty("startTime", "开始时间（Unix 秒）")
+                                .addIntegerProperty("endTime", "结束时间（Unix 秒）")
+                                .addIntegerProperty("limit", "返回时间点数上限，默认100")
+                                .build())
+                        .build(),
+                ToolSpecification.builder()
+                        .name("calculate")
+                        .description("四则运算计算器，返回 {expression, value}。需要计算指标值/比率/百分比（如内存占比公式）时必须调用它，禁止心算；expression 为纯数学表达式（+ - * / 括号），变量先代入具体数值")
+                        .parameters(JsonObjectSchema.builder()
+                                .addStringProperty("expression", "纯数学四则表达式，如 (100-30)/(100+50)*100")
+                                .required("expression")
                                 .build())
                         .build());
     }
@@ -130,6 +160,16 @@ public class AnalysisToolRegistry {
             case "getSlowSpans" -> dataAnalyticsService.getSlowSpans(
                     ctx.serviceOr(args),
                     ctx.startOr(args), ctx.endOr(args), intOr(args.get("limit"), 10));
+            case "getTraceCount" -> dataAnalyticsService.getTraceCount(
+                    ctx.serviceOr(args), ctx.startOr(args), ctx.endOr(args));
+            case "getMemoryUsage" -> dataAnalyticsService.getMemoryUsage(
+                    ctx.serviceOr(args),
+                    ctx.startOr(args), ctx.endOr(args), intOr(args.get("limit"), 100));
+            // 计算结果必须是对象而非裸数字：裸数字 0 会被执行器判为"全空"误计入止损计数
+            case "calculate" -> {
+                ExpressionEvaluator.EvalResult calc = expressionEvaluator.eval(str(args.get("expression")));
+                yield Map.of("expression", calc.expression(), "value", calc.value());
+            }
             default -> throw new IllegalArgumentException("未知工具: " + name);
         };
         try {

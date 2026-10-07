@@ -9,6 +9,10 @@ export interface Alert {
   endsAt?: string
   incidentId: number | null
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  /** 评测打标三布尔（独立可组合）：正式=isProd；评测集=isEval；测试=isTest */
+  isProd?: boolean
+  isEval?: boolean
+  isTest?: boolean
 }
 
 // 分析事件
@@ -45,7 +49,14 @@ export interface AnalysisReport {
   recommendedActions: Array<{ priority: number; action: string }>
   /** 判断逻辑：证据融入推理链的叙述文本 */
   judgmentLogic: string
+  /** 人工采纳标注（评测）：true=赞同 false=不赞同 null/undefined=未标注 */
+  adopted?: boolean | null
+  /** 不赞同原因（可多选；赞同或未说明原因为空数组） */
+  adoptIssues?: AdoptIssue[]
 }
+
+// 不赞同原因子维度（评测口径见 docs/plan/EVALUATION_PLAN.md）
+export type AdoptIssue = 'noise' | 'evidence' | 'sop' | 'logic' | 'leak' | 'redundant'
 
 // 统一响应
 export interface ApiResponse<T = any> {
@@ -85,3 +96,49 @@ export interface HistoryEvent {
 export interface AlertDetail extends Alert {
   labels?: Record<string, string>
 }
+
+// ---- 评测统计（口径见 docs/plan/EVALUATION_PLAN.md）----
+
+// 汇总指标（GET /api/stats/evaluation）
+export interface EvaluationStats {
+  scope: { since: string | null; bucket: string; all: boolean; totalIncidents: number }
+  completion: { total: number; completed: number; failed: number; running: number; completionRate: number }
+  durationSeconds: { count: number; p50: number | null; p95: number | null }
+  toolCalls: {
+    incidentsWithTools: number
+    incidentsWithoutTools: number
+    avgCalls: number
+    maxCalls: number
+    distribution: Array<{ bucket: string; incidents: number }>
+  }
+  runaway: { iterationExhausted: number; thoughtLoop: number; incidents: number; rate: number }
+  failedReasons: { llmCallFailed: number; reportParseFailed: number; iterationExhausted: number; other: number }
+  toolSuccess: { total: number; success: number; rate: number }
+  adoption: {
+    annotated: number
+    adopted: number
+    dislike: number
+    dislikeNoReason: number
+    rate: number
+    issueCounts: { noise: number; evidence: number; sop: number; logic: number; leak: number; redundant: number }
+  }
+}
+
+// 下钻明细行（GET /api/stats/evaluation/incidents，按指标附加对应字段）
+export interface DrillRow {
+  incidentId: number
+  alertName: string | null
+  service: string | null
+  startsAt: string | null
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  durationSeconds: number | null
+  adopted?: boolean | null
+  adoptIssues?: AdoptIssue[]
+  tag?: string | null
+  failedReason?: string
+  runawaySignal?: string
+  toolCallCount?: number
+}
+
+// 下钻指标
+export type DrillMetric = 'failed' | 'slow' | 'toolCalls' | 'runaway' | 'dislike'

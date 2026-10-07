@@ -50,6 +50,9 @@ public class ToolCallSummarizer {
                 case "getMetrics" -> metrics(args, ctx, result);
                 case "getKpi" -> kpi(args, ctx, result);
                 case "getSlowSpans" -> slowSpans(args, ctx, result);
+                case "getTraceCount" -> traceCount(args, ctx, resultText);
+                case "getMemoryUsage" -> memoryUsage(args, ctx, result);
+                case "calculate" -> calculate(args, result);
                 default -> null;
             };
         } catch (Exception e) {
@@ -98,6 +101,22 @@ public class ToolCallSummarizer {
         String detail = "统计 " + service(args, ctx) + range(args, ctx)
                 + (keyword == null ? "" : "包含 " + keyword + " ") + "的日志数量：" + total + " 条";
         return new Display("查阅 " + total + " 条日志", detail, total > 0 ? "共 " + total + " 条" : "未查询到日志");
+    }
+
+    /**
+     * getTraceCount 文案：裸数字结果（镜像 countLogs），展示 span 总数统计。
+     * 0 条时证据写"未查询到调用链数据"——与 getSlowSpans 的"未查询到慢调用"区分：
+     * 前者才是判定"调用链数据缺失"的依据。
+     */
+    private Display traceCount(Map<String, Object> args, ToolContext ctx, String resultText) {
+        long total;
+        try {
+            total = Long.parseLong(resultText == null ? "0" : resultText.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        String detail = "统计 " + service(args, ctx) + range(args, ctx) + "的调用 span 总数：" + total + " 条";
+        return new Display("查阅 调用链", detail, total > 0 ? "共 " + total + " 条" : "未查询到调用链数据");
     }
 
     private Display metrics(Map<String, Object> args, ToolContext ctx, JsonNode result) {
@@ -166,6 +185,70 @@ public class ToolCallSummarizer {
         return new Display("查阅 调用链", detail, evidence);
     }
 
+    /**
+     * 内存占比工具：items 按时间升序，末条即最新；证据提炼最新两点占比与 NoCacheMemPerc 峰值
+     */
+    private Display memoryUsage(Map<String, Object> args, ToolContext ctx, JsonNode result) {
+        int total = result.path("total").asInt(0);
+        JsonNode items = result.path("items");
+        String detail = "查找 " + service(args, ctx) + range(args, ctx) + "的内存占比，得到 " + total + " 个时间点。";
+        String evidence;
+        if (total == 0 || !items.isArray() || items.isEmpty()) {
+            evidence = "未查询到数据";
+        } else {
+            JsonNode latest = items.get(items.size() - 1);
+            String hhmm = hhmmOf(latest.path("time").asText(""));
+            StringBuilder sb = new StringBuilder("最新（").append(hhmm)
+                    .append("）NoCacheMemPerc ").append(latest.path("noCacheMemPerc").asText("?"))
+                    .append("、MEMUsedMemPerc ").append(latest.path("memUsedMemPerc").asText("?"));
+            String peakText = peakPerc(items);
+            if (peakText != null) {
+                sb.append("，峰值 NoCacheMemPerc ").append(peakText);
+            }
+            sb.append("；共 ").append(total).append(" 个时间点");
+            evidence = sb.toString();
+        }
+        return new Display("查阅 " + total + " 条指标", detail, evidence);
+    }
+
+    /** "2021-03-04 11:50:00" → "11:50"，格式不符返回 "?" */
+    private String hhmmOf(String time) {
+        return time.length() >= 16 ? time.substring(11, 16) : "?";
+    }
+
+    /** 扫描 items 取 noCacheMemPerc 峰值（"80.1%" 形式），无可解析值返回 null */
+    private String peakPerc(JsonNode items) {
+        double peak = Double.NEGATIVE_INFINITY;
+        String peakText = null;
+        for (JsonNode item : items) {
+            String text = item.path("noCacheMemPerc").asText("");
+            if (!text.endsWith("%")) {
+                continue;
+            }
+            try {
+                double value = Double.parseDouble(text.substring(0, text.length() - 1));
+                if (value > peak) {
+                    peak = value;
+                    peakText = text;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return peakText;
+    }
+
+    private Display calculate(Map<String, Object> args, JsonNode result) {
+        String expression = str(args.get("expression"));
+        if (expression == null) {
+            expression = result.path("expression").asText("");
+        }
+        String detail = "计算 " + abbreviate(expression, 40);
+        if (!result.path("value").isNumber()) {
+            return new Display("执行计算", detail, null);
+        }
+        return new Display("执行计算", detail + "，结果 " + fmtCalcValue(result.path("value").asDouble()), null);
+    }
+
     // ---- 公共片段 ----
 
     private String service(Map<String, Object> args, ToolContext ctx) {
@@ -201,6 +284,22 @@ public class ToolCallSummarizer {
             return String.valueOf((long) value);
         }
         return String.format("%.2f", value);
+    }
+
+    /**
+     * calculate 结果展示：整数显示整数，小数最多 4 位并去末尾 0（0.8765 不丢精度，1.50 显示 1.5）。
+     * 不复用 fmtValue（其 %.2f 会把 0-1 区间指标舍成两位）
+     */
+    private String fmtCalcValue(double value) {
+        if (value == Math.rint(value) && Math.abs(value) < 1e15) {
+            return String.valueOf((long) value);
+        }
+        String text = String.format("%.4f", value);
+        int end = text.length();
+        while (end > 0 && text.charAt(end - 1) == '0') {
+            end--;
+        }
+        return text.substring(0, end);
     }
 
     /**
