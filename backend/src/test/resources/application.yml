@@ -1,0 +1,11 @@
+spring:
+  profiles:
+    active: test-mysql
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true

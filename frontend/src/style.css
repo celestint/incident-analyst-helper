@@ -1,0 +1,137 @@
+/* 全局基础样式（已移除脚手架残留的居中/限宽样式） */
+
+:root {
+  /* ===== 主题 token（全站颜色唯一定义处，组件内禁止裸 hex） ===== */
+
+  /* 主题色：苔绿（OKLCH 书写，按明度/色度分层微调） */
+  --color-primary: oklch(50% 0.1 150);
+  --color-primary-light-3: oklch(65% 0.09 150);
+  --color-primary-light-5: oklch(78% 0.07 150);
+  --color-primary-light-7: oklch(89% 0.05 150);
+  --color-primary-light-8: oklch(93% 0.04 150);
+  --color-primary-light-9: oklch(95.5% 0.03 150);
+  --color-primary-dark-2: oklch(42% 0.09 150);
+
+  /* 语义状态色（降饱和苔原调） */
+  --color-success: oklch(66% 0.13 135);
+  --color-warning: oklch(70% 0.13 70);
+  --color-danger: oklch(60% 0.17 27);
+  --color-info: oklch(55% 0.015 110);
+
+  /* 语义状态色 light 梯度（EP 的 tag 底色/边框、按钮 hover 引用，必须一并接管，
+     否则出现"字换了色、底还是旧色"的混搭） */
+  --color-success-light-3: oklch(74% 0.1 135);
+  --color-success-light-5: oklch(83% 0.08 135);
+  --color-success-light-7: oklch(91% 0.06 135);
+  --color-success-light-8: oklch(94% 0.05 135);
+  --color-success-light-9: oklch(96% 0.035 135);
+  --color-warning-light-3: oklch(77% 0.1 70);
+  --color-warning-light-5: oklch(85% 0.08 75);
+  --color-warning-light-7: oklch(92% 0.055 82);
+  --color-warning-light-8: oklch(94.5% 0.045 85);
+  --color-warning-light-9: oklch(96.5% 0.035 85);
+  --color-danger-light-3: oklch(73% 0.12 27);
+  --color-danger-light-5: oklch(82% 0.09 27);
+  --color-danger-light-7: oklch(90% 0.06 27);
+  --color-danger-light-8: oklch(93.5% 0.045 27);
+  --color-danger-light-9: oklch(96.5% 0.03 27);
+  --color-info-light-3: oklch(68% 0.012 110);
+  --color-info-light-5: oklch(77% 0.01 110);
+  --color-info-light-7: oklch(87% 0.008 110);
+  --color-info-light-8: oklch(91.5% 0.008 110);
+  --color-info-light-9: oklch(95.5% 0.008 110);
+
+  /* 用户视角（仿 IM 群消息流）专用：聊天链接蓝与高饱和语义文字色（不接管 Element Plus） */
+  --color-link: #576b95;
+  --color-danger-strong: oklch(52% 0.23 27);
+  --color-warning-strong: oklch(55% 0.19 55);
+  --color-success-strong: oklch(40% 0.13 150);
+
+  /* 灰阶 / 文字 / 边框（暖调中性） */
+  --color-text-primary: oklch(28% 0.02 140);
+  --color-text-regular: oklch(42% 0.02 140);
+  --color-text-secondary: oklch(55% 0.015 130);
+  --color-border: oklch(88% 0.015 110);
+  --color-border-light: oklch(92.5% 0.012 110);
+  --color-bg-page: oklch(97.2% 0.008 100);
+
+  /* ===== Element Plus 主题变量接管 ===== */
+  --el-color-primary: var(--color-primary);
+  --el-color-primary-light-3: var(--color-primary-light-3);
+  --el-color-primary-light-5: var(--color-primary-light-5);
+  --el-color-primary-light-7: var(--color-primary-light-7);
+  --el-color-primary-light-8: var(--color-primary-light-8);
+  --el-color-primary-light-9: var(--color-primary-light-9);
+  --el-color-primary-dark-2: var(--color-primary-dark-2);
+  --el-color-success: var(--color-success);
+  --el-color-warning: var(--color-warning);
+  --el-color-danger: var(--color-danger);
+  --el-color-error: var(--color-danger);
+  --el-color-info: var(--color-info);
+  --el-color-success-light-3: var(--color-success-light-3);
+  --el-color-success-light-5: var(--color-success-light-5);
+  --el-color-success-light-7: var(--color-success-light-7);
+  --el-color-success-light-8: var(--color-success-light-8);
+  --el-color-success-light-9: var(--color-success-light-9);
+  --el-color-warning-light-3: var(--color-warning-light-3);
+  --el-color-warning-light-5: var(--color-warning-light-5);
+  --el-color-warning-light-7: var(--color-warning-light-7);
+  --el-color-warning-light-8: var(--color-warning-light-8);
+  --el-color-warning-light-9: var(--color-warning-light-9);
+  --el-color-danger-light-3: var(--color-danger-light-3);
+  --el-color-danger-light-5: var(--color-danger-light-5);
+  --el-color-danger-light-7: var(--color-danger-light-7);
+  --el-color-danger-light-8: var(--color-danger-light-8);
+  --el-color-danger-light-9: var(--color-danger-light-9);
+  --el-color-info-light-3: var(--color-info-light-3);
+  --el-color-info-light-5: var(--color-info-light-5);
+  --el-color-info-light-7: var(--color-info-light-7);
+  --el-color-info-light-8: var(--color-info-light-8);
+  --el-color-info-light-9: var(--color-info-light-9);
+  --el-text-color-primary: var(--color-text-primary);
+  --el-text-color-regular: var(--color-text-regular);
+  --el-text-color-secondary: var(--color-text-secondary);
+  --el-border-color: var(--color-border);
+  --el-border-color-light: var(--color-border-light);
+  --el-fill-color-light: var(--color-bg-page);
+  --el-border-radius-base: 6px;
+
+  --el-font-size-base: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-page);
+  font-family: system-ui, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 600;
+}
+
+/* 常驻动画的降级：开启"减少动态效果"时全部收敛为静态 */
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.ongoing,
+  .streaming-text .cursor {
+    animation: none;
+  }
+}

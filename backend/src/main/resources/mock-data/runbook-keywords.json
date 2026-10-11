@@ -1,0 +1,5 @@
+{
+  "HighCPUUsage.md":    ["cpu", "处理器", "负载过高"],
+  "HighMemoryUsage.md": ["memory", "内存", "oom"],
+  "PodCrashLoop.md":    ["crashloop", "重启", "pod"]
+}

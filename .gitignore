@@ -1,0 +1,80 @@
+# Agent
+CLAUDE.md
+.cursor
+docs/AGENTS.md
+AGENTS.md
+
+# Local runtime data
+backend/data/
+theme-preview.html
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# IDE - Eclipse
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache
+
+# IDE - VS Code
+.vscode/
+
+# IDE - NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# backend
+!**/src/main/**/target/
+!**/src/test/**/target/
+backend/src/main/resources/application-local.yml
+
+# Mock data large CSVs (AIOps dataset, kept locally only; directories preserved via .gitkeep)
+backend/src/main/resources/mock-data/logs/*
+backend/src/main/resources/mock-data/metrics/*
+backend/src/main/resources/mock-data/traces/*
+!backend/src/main/resources/mock-data/logs/.gitkeep
+!backend/src/main/resources/mock-data/metrics/.gitkeep
+!backend/src/main/resources/mock-data/traces/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Java archives
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
